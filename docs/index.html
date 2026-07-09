@@ -46,6 +46,9 @@ header .spacer{flex:1}
 .role-pill{font-size:10px; font-weight:800; letter-spacing:1px; padding:4px 8px; border-radius:6px; margin-right:6px}
 .role-pill.admin{background:var(--gold); color:var(--ink)}
 .role-pill.staff{background:#333; color:#bbb}
+.conn{width:9px; height:9px; border-radius:50%; background:#888; flex-shrink:0; transition:background .3s}
+.conn.on{background:#39d353; box-shadow:0 0 6px rgba(57,211,83,.6)}
+.conn.off{background:#c62828}
 #refresh-btn{font-size:16px; line-height:1; padding:7px 10px}
 #refresh-btn.spinning{animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -183,6 +186,7 @@ nav button{position:relative}
 <header>
   <div class="brand"><b>KelMar</b> <span>Projects</span><small>Tool Tracker</small></div>
   <div class="spacer"></div>
+  <span id="conn-dot" class="conn" title="Connecting…"></span>
   <span id="role-pill" class="role-pill hidden"></span>
   <button class="hbtn" id="refresh-btn" onclick="refreshNow(true)" title="Refresh now">⟳</button>
   <button class="hbtn" onclick="openBackup()">⋯ Data</button>
@@ -337,7 +341,9 @@ function signInStaff(attempt=0){
   });
 }
 // pull the latest from the cloud (fallback for when the live link drops on phones)
-let refreshing=false;
+let refreshing=false, connOk=false;
+function setConn(ok){ connOk=ok; const d=document.getElementById('conn-dot'); if(d){ d.className='conn '+(ok?'on':'off'); d.title=ok?'Synced with the cloud':'Offline — changes upload when you reconnect'; } }
+function ensureOnline(){ try{ fdb.enableNetwork(); }catch(e){} }
 async function refreshNow(manual){
   const u=auth.currentUser;
   if(!u){ if(role!=='admin') signInStaff(); return; }
@@ -349,14 +355,13 @@ async function refreshNow(manual){
       const snap=await q.get({source:'server'});
       db[name]=snap.docs.map(d=>({id:d.id,...d.data()}));
     }));
-    renderAll();
+    renderAll(); setConn(true);
     if(manual) toast('🔄 Up to date');
-  }catch(e){ console.warn('refresh',e); if(manual) toast('⚠️ Couldn’t refresh — check signal'); }
+  }catch(e){ console.warn('refresh',e); setConn(false); if(manual) toast('⚠️ Couldn’t refresh — check signal'); }
   finally{ refreshing=false; if(b) b.classList.remove('spinning'); }
 }
-// after any entry, force a quick sync so it lands in the cloud and everyone sees it fast (debounced)
-let _nudgeT;
-function nudge(){ clearTimeout(_nudgeT); _nudgeT=setTimeout(()=>refreshNow(), 700); }
+// after any entry, make sure we're online so the write lands — onSnapshot then shows it to everyone live
+function nudge(){ ensureOnline(); }
 function startApp(){
   if(appStarted) return; appStarted=true;
   closeModal();
@@ -366,12 +371,15 @@ function startApp(){
   subscribeAll();
   seedIfEmpty();
   renderAll();
-  // safety net: re-pull from the cloud every 30s while the app is open, and
-  // whenever the phone comes back to the app — so a dropped live link self-heals
+  // stay in sync cheaply: keep the live link alive every 30s, and only do a full
+  // re-pull if we've dropped offline. On reopening the app, do a full catch-up.
   clearInterval(window._kmRefresh);
-  window._kmRefresh=setInterval(()=>{ if(document.visibilityState==='visible') refreshNow(); }, 30000);
+  window._kmRefresh=setInterval(()=>{
+    if(document.visibilityState!=='visible') return;
+    if(connOk) ensureOnline(); else refreshNow();
+  }, 30000);
   if(!window._kmVis){ window._kmVis=true;
-    document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') refreshNow(); });
+    document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'){ ensureOnline(); refreshNow(); } });
   }
 }
 function showAdminGate(){
@@ -407,10 +415,11 @@ function subscribeAll(){
   COLS.forEach(name=>{
     let q = col(name);
     if(name==='log') q = q.orderBy('at','asc');
-    q.onSnapshot(snap=>{
+    q.onSnapshot({includeMetadataChanges:true}, snap=>{
       db[name] = snap.docs.map(d=>({ id:d.id, ...d.data() }));
+      if(!snap.metadata.fromCache) setConn(true);
       renderAll();
-    }, err=>console.warn('sync '+name, err));
+    }, err=>{ console.warn('sync '+name, err); setConn(false); });
   });
 }
 async function seedIfEmpty(){
@@ -476,7 +485,7 @@ function tool(id){ return db.tools.find(t=>t.id===id); }
 function initials(name){ return name.split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase(); }
 function nextCode(){
   let max=0; db.tools.forEach(t=>{ const m=/(\d+)/.exec(t.code||''); if(m) max=Math.max(max,+m[1]); });
-  return 'KM-'+String(max+1).padStart(4,'0');
+  return 'KMT-'+String(max+1).padStart(3,'0');
 }
 function timeAgo(iso){
   if(!iso) return '';
@@ -566,7 +575,7 @@ function renderTools(){
   const el=document.getElementById('tools-list');
   el.innerHTML = list.length ? list.map(t=>{
     const p=person(t.holder);
-    return `<div class="row" onclick="toolDetail('${t.id}')" style="cursor:pointer"><div class="tool-ico">🔧</div>
+    return `<div class="row" onclick="toolDetail('${t.id}')" style="cursor:pointer">${t.img?`<img src="${t.img}" style="width:38px;height:38px;border-radius:10px;object-fit:cover;flex-shrink:0">`:`<div class="tool-ico">🔧</div>`}
       <div class="grow"><div class="name">${esc(t.name)}</div>
       <div class="meta">${t.code} · ${esc(t.category||'')}${t.status==='out'&&p?' · with '+esc(p.name):''}</div></div>
       <span class="pill ${t.status}">${t.status==='out'?'OUT':'IN'}</span>
@@ -579,7 +588,7 @@ function renderScanList(){
   el.innerHTML = db.tools.map(t=>{
     const p=person(t.holder);
     return `<div class="row" onclick="openSign('${t.id}')" style="cursor:pointer">
-      <div class="tool-ico">🔧</div>
+      ${t.img?`<img src="${t.img}" style="width:38px;height:38px;border-radius:10px;object-fit:cover;flex-shrink:0">`:`<div class="tool-ico">🔧</div>`}
       <div class="grow"><div class="name">${esc(t.name)}</div>
       <div class="meta">${t.code}${t.status==='out'&&p?' · with '+esc(p.name):''}</div></div>
       <span class="pill ${t.status}">${t.status==='out'?'OUT':'IN'}</span></div>`;
@@ -796,7 +805,7 @@ function openRequest(personId){
   modal(`<h3>Request supplies</h3>
     <p class="sub" style="margin:2px 0 12px">Flag what you're short on — it goes to Mitch's order list under your name.</p>
     <label class="field"><span class="lab">Who's asking?</span>
-      <select id="r-person">${db.people.filter(p=>p.id!=='p1').map(p=>`<option value="${p.id}" ${p.id===personId?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>
+      <select id="r-person">${db.people.map(p=>`<option value="${p.id}" ${p.id===personId?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>
     <label class="field"><span class="lab">What do you need?</span>
       <input id="r-item" list="known-items" placeholder="e.g. 75mm Bugle Screws (box)">
       <datalist id="known-items">${knownItems().map(n=>`<option>${esc(n)}</option>`).join('')}</datalist></label>
@@ -820,26 +829,66 @@ function fulfillRequest(id){
   toast('✅ Marked as given');
 }
 
+/* ===== reusable camera (tool photos, rear-facing) ===== */
+let _toolImg=null, _camStream=null, _camData=null, _camDone=null;
+function openCamera(subtitle, onDone){
+  _camData=null; _camDone=onDone;
+  modal(`<h3>Photo of the tool</h3><p class="sub" style="margin:2px 0 12px">${esc(subtitle||'')}</p>
+    <video id="cam-v" autoplay playsinline muted style="width:100%;border-radius:14px;background:#111;aspect-ratio:4/3;object-fit:cover"></video>
+    <canvas id="cam-c" class="hidden"></canvas>
+    <div id="cam-p"></div>
+    <div class="btn-row" id="cam-b" style="margin-top:12px">
+      <button class="btn" onclick="camShoot()">📸 Take photo</button>
+      <button class="btn ghost" onclick="camFinish(null)">Skip</button>
+    </div>`);
+  navigator.mediaDevices?.getUserMedia({video:{facingMode:'environment'},audio:false})
+    .then(s=>{ _camStream=s; const v=document.getElementById('cam-v'); if(v) v.srcObject=s; else s.getTracks().forEach(t=>t.stop()); })
+    .catch(()=>{ const b=document.getElementById('cam-p'); if(b) b.innerHTML='<p class="sub" style="color:var(--charcoal)">📷 No camera on this device — tap Skip.</p>'; });
+}
+function camShoot(){
+  const v=document.getElementById('cam-v'), c=document.getElementById('cam-c');
+  if(!v||!v.videoWidth){ toast('⚠️ Camera not ready'); return; }
+  const w=440, h=Math.round(w*(v.videoHeight/v.videoWidth));
+  c.width=w; c.height=h; c.getContext('2d').drawImage(v,0,0,w,h);
+  _camData=c.toDataURL('image/jpeg',0.5);
+  camStop();
+  document.getElementById('cam-v').classList.add('hidden');
+  document.getElementById('cam-p').innerHTML=`<img src="${_camData}" style="width:100%;border-radius:14px">`;
+  document.getElementById('cam-b').innerHTML=`<button class="btn" onclick="camFinish(_camData)">✅ Use photo</button><button class="btn ghost" onclick="camRetake()">↺ Retake</button>`;
+}
+function camRetake(){ openCamera('Point the camera at the tool and take a clear photo.', _camDone); }
+function camStop(){ if(_camStream){ _camStream.getTracks().forEach(t=>t.stop()); _camStream=null; } }
+function camFinish(data){ camStop(); const cb=_camDone; _camDone=null; if(cb) cb(data); }
+
 /* ============ Edit tool ============ */
-function editTool(id){
-  const t=id?tool(id):{code:nextCode(),name:'',category:'',home:'Garage',status:'in',holder:null,since:null};
+function editTool(id, keep){
+  const t=id?tool(id):null;
+  const cur = keep || t || {code:nextCode(),name:'',category:'',home:'Garage'};
+  _toolImg = keep ? (keep.img||null) : (t? (t.img||null) : null);
   modal(`
     <h3>${id?'Edit tool':'Add tool'}</h3>
-    <div style="margin-top:14px"></div>
-    <label class="field"><span class="lab">Tool name</span><input id="f-name" value="${esc(t.name)}" placeholder="e.g. Makita Cordless Drill"></label>
-    <label class="field"><span class="lab">Tool ID / code</span><input id="f-code" value="${esc(t.code)}"></label>
-    <label class="field"><span class="lab">Category</span><input id="f-cat" value="${esc(t.category||'')}" placeholder="e.g. Power tools" list="cats">
+    <label class="field" style="margin-top:14px"><span class="lab">Tool name</span><input id="f-name" value="${esc(cur.name||'')}" placeholder="e.g. Demolition saw"></label>
+    <label class="field"><span class="lab">Tool ID (auto-assigned)</span><input id="f-code" value="${esc(cur.code||'')}" readonly style="background:var(--grey); color:var(--charcoal)"></label>
+    <label class="field"><span class="lab">Category</span><input id="f-cat" value="${esc(cur.category||'')}" placeholder="e.g. Power tools" list="cats">
       <datalist id="cats">${[...new Set(db.tools.map(x=>x.category).filter(Boolean))].map(c=>`<option>${esc(c)}</option>`).join('')}</datalist></label>
-    <label class="field"><span class="lab">Home location</span><input id="f-home" value="${esc(t.home||'Garage')}"></label>
-    <div class="btn-row" style="margin-top:8px">
+    <label class="field"><span class="lab">Home location</span><input id="f-home" value="${esc(cur.home||'Garage')}" placeholder="Garage / Office" list="homes">
+      <datalist id="homes"><option>Garage</option><option>Office</option></datalist></label>
+    <span class="lab" style="font-size:12px;font-weight:600;color:var(--charcoal)">Photo of the tool</span>
+    <div id="tool-photo-preview" style="margin:5px 0 8px">${_toolImg?`<img src="${_toolImg}" style="width:100%;max-height:200px;object-fit:cover;border-radius:12px">`:''}</div>
+    <button class="btn ghost block" onclick="captureToolPhoto('${id||''}')">${_toolImg?'📷 Replace photo':'📷 Take a photo of the tool'}</button>
+    <div class="btn-row" style="margin-top:12px">
       <button class="btn" onclick="saveTool('${id||''}')">Save</button>
       ${id&&isAdmin()?`<button class="btn danger" onclick="delTool('${id}')">Delete</button>`:''}
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
     </div>`);
 }
+function captureToolPhoto(id){
+  const draft={name:val('f-name'),code:val('f-code'),category:val('f-cat'),home:val('f-home'),img:_toolImg};
+  openCamera('Point the camera at the tool and take a clear photo.', data=>{ if(data) draft.img=data; editTool(id||null, draft); });
+}
 function saveTool(id){
   const name=val('f-name').trim(); if(!name){ toast('⚠️ Enter a tool name'); return; }
-  const data={name,code:val('f-code').trim()||nextCode(),category:val('f-cat').trim(),home:val('f-home').trim()};
+  const data={name,code:val('f-code').trim()||nextCode(),category:val('f-cat').trim(),home:val('f-home').trim(),img:_toolImg||null};
   if(id){ col('tools').doc(id).update(data); }
   else { col('tools').doc(uid('t')).set({status:'in',holder:null,since:null,photo:null,...data}); }
   closeModal(); nudge(); toast('✅ Saved');
@@ -852,7 +901,7 @@ function editVan(id){
   modal(`<h3>${id?'Edit van / vehicle':'Add van / vehicle'}</h3>
     <label class="field" style="margin-top:14px"><span class="lab">Name</span><input id="f-vname" value="${esc(v.name)}" placeholder="e.g. Dave's Ute"></label>
     <label class="field"><span class="lab">Belongs to</span>
-      <select id="f-vowner"><option value="">— nobody —</option>${db.people.filter(p=>p.id!=='p1').map(p=>`<option value="${p.id}" ${v.owner===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>
+      <select id="f-vowner"><option value="">— nobody —</option>${db.people.map(p=>`<option value="${p.id}" ${v.owner===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>
     <div class="btn-row">
       <button class="btn" onclick="saveVan('${id||''}')">Save</button>
       ${id&&isAdmin()?`<button class="btn danger" onclick="delVan('${id}')">Delete</button>`:''}
@@ -941,6 +990,7 @@ function openBackup(){
     <p class="sub" style="margin:6px 0 14px">Share the <b>staff link</b> with the crew — each person saves it to their phone's home screen.</p>
     <label class="field"><span class="lab">👷 Staff link (for the boys)</span><input readonly value="${esc(base)}" onclick="this.select()"></label>
     <button class="btn block" onclick="copyLink('${esc(base)}')">📋 Copy staff link</button>
+    <button class="btn ghost block" style="margin-top:10px" onclick="openCrew()">👥 Manage crew</button>
     ${admin?`
     <label class="field" style="margin-top:16px"><span class="lab">🔑 Admin link (keep this for yourself)</span><input readonly value="${esc(base)}#admin" onclick="this.select()"></label>
     <button class="btn ghost block" onclick="copyLink('${esc(base)}#admin')">📋 Copy admin link</button>
@@ -954,6 +1004,26 @@ function openBackup(){
     `}`);
 }
 function copyLink(u){ (navigator.clipboard?.writeText(u)||Promise.reject()).then(()=>toast('📋 Copied'),()=>toast(u)); }
+function openCrew(){
+  modal(`<h3>Crew</h3><p class="sub" style="margin:2px 0 12px">Add your team so they appear when signing tools out and making requests.</p>
+    <div>${db.people.map(p=>`<div class="row"><div class="avatar">${initials(p.name)}</div>
+      <div class="grow"><div class="name">${esc(p.name)}</div></div>
+      ${isAdmin()?`<button class="btn sm danger" onclick="delCrew('${p.id}')">Remove</button>`:''}</div>`).join('')||'<div class="empty">No crew yet.</div>'}</div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <input id="crew-name" placeholder="New crew member name" onkeydown="if(event.key==='Enter')addCrew()">
+      <button class="btn" onclick="addCrew()">Add</button>
+    </div>
+    ${isAdmin()?'':'<p class="sub" style="margin-top:12px;font-size:12px">Removing crew is admin-only.</p>'}`);
+}
+function addCrew(){
+  const n=val('crew-name').trim(); if(!n) return;
+  const id=uid('p'); db.people.push({id,name:n}); col('people').doc(id).set({name:n}); nudge();
+  toast('✅ '+esc(n)+' added'); openCrew();
+}
+function delCrew(id){
+  if(!confirm('Remove this crew member?')) return;
+  db.people=db.people.filter(p=>p.id!==id); col('people').doc(id).delete(); openCrew();
+}
 function exportData(){
   const blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
@@ -1001,7 +1071,7 @@ function modal(html){
     `<div class="modal" onclick="if(event.target===this)closeModal()">
        <div class="sheet"><div class="handle"></div>${html}</div></div>`;
 }
-function closeModal(){ stopCaptureCamera(); document.getElementById('modal-root').innerHTML=''; }
+function closeModal(){ stopCaptureCamera(); camStop(); document.getElementById('modal-root').innerHTML=''; }
 function val(id){ return document.getElementById(id).value; }
 function esc(s){ return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 

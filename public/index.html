@@ -325,7 +325,13 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const fdb = firebase.firestore();
-fdb.enablePersistence({ synchronizeTabs:true }).catch(()=>{});   // works offline / patchy signal
+// CRITICAL: phones on mobile Safari / home-screen apps / carrier networks buffer
+// Firestore's default streaming transport — reads get through but WRITES never reach
+// the server (they sit stuck on the phone). Forcing HTTP long-polling sends writes as
+// plain web requests those networks DO pass. Must run before enablePersistence & any read/write.
+fdb.settings({ experimentalForceLongPolling: true, merge: true });
+fdb.enablePersistence({ synchronizeTabs:true }).catch(()=>{});   // offline / patchy signal
+function withTimeout(p, ms){ return Promise.race([Promise.resolve(p), new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')), ms))]); }
 const COLS = ['people','tools','vans','requests','log'];
 
 let db = { people:[], tools:[], vans:[], requests:[], log:[] };
@@ -760,19 +766,29 @@ function finishSignOut(photo){
 function cancelCapture(){ stopCaptureCamera(); pendingSignOut=null; capturedPhoto=null; closeModal(); }
 function stopCaptureCamera(){ if(captureStream){ captureStream.getTracks().forEach(t=>t.stop()); captureStream=null; } }
 
-function doSignOut(toolId,personId,photo){
+async function doSignOut(toolId,personId,photo){
   const t=tool(toolId); const now=nowISO();
-  col('tools').doc(toolId).update({status:'out',holder:personId,since:now,photo:photo||null});
-  col('log').add({toolId,action:'out',personId,at:now,photo:photo||null});
-  closeModal(); nudge();
-  toast(`📤 <span class="k">${esc(t.name)}</span> signed out to ${esc(person(personId).name)}`);
+  if(!auth.currentUser){ toast('⚠️ Still connecting — try again in a sec'); return; }
+  closeModal();
+  try{
+    await col('tools').doc(toolId).update({status:'out',holder:personId,since:now,photo:photo||null});
+    col('log').add({toolId,action:'out',personId,at:now,photo:photo||null});
+    await withTimeout(fdb.waitForPendingWrites(), 12000);
+    setConn(true);
+    toast(`📤 <span class="k">${esc(t.name)}</span> signed out to ${esc(person(personId).name)}`);
+  }catch(e){ console.error('signOut',e); toast('⚠️ Not synced — check signal, then tap ⟳'); }
 }
-function doSignIn(toolId){
+async function doSignIn(toolId){
   const t=tool(toolId); const prev=t.holder;
-  col('tools').doc(toolId).update({status:'in',holder:null,since:null,photo:null});
-  col('log').add({toolId,action:'in',personId:prev,at:nowISO()});
-  closeModal(); nudge();
-  toast(`📥 <span class="k">${esc(t.name)}</span> returned. Thanks!`);
+  if(!auth.currentUser){ toast('⚠️ Still connecting — try again in a sec'); return; }
+  closeModal();
+  try{
+    await col('tools').doc(toolId).update({status:'in',holder:null,since:null,photo:null});
+    col('log').add({toolId,action:'in',personId:prev,at:nowISO()});
+    await withTimeout(fdb.waitForPendingWrites(), 12000);
+    setConn(true);
+    toast(`📥 <span class="k">${esc(t.name)}</span> returned. Thanks!`);
+  }catch(e){ console.error('signIn',e); toast('⚠️ Not synced — check signal, then tap ⟳'); }
 }
 function addPersonThenSignOut(toolId){
   const name=prompt('New person / crew member name:');
@@ -901,12 +917,22 @@ function captureToolPhoto(id){
   const draft={name:val('f-name'),code:val('f-code'),category:val('f-cat'),home:val('f-home'),img:_toolImg};
   openCamera('Point the camera at the tool and take a clear photo.', data=>{ if(data) draft.img=data; editTool(id||null, draft); });
 }
-function saveTool(id){
+async function saveTool(id){
   const name=val('f-name').trim(); if(!name){ toast('⚠️ Enter a tool name'); return; }
-  const data={name,code:val('f-code').trim()||nextCode(),category:val('f-cat').trim(),home:val('f-home').trim(),img:_toolImg||null};
-  if(id){ col('tools').doc(id).update(data); }
-  else { col('tools').doc(uid('t')).set({status:'in',holder:null,since:null,photo:null,...data}); }
-  closeModal(); nudge(); toast('✅ Saved');
+  if(!auth.currentUser){ toast('⚠️ Still connecting — give it a sec and try again'); return; }
+  let img=_toolImg||null;
+  if(img && img.length>800000){ img=null; toast('⚠️ Photo too big — saving the tool without it'); }
+  const data={name,code:val('f-code').trim()||nextCode(),category:val('f-cat').trim(),home:val('f-home').trim(),img};
+  closeModal(); toast('Saving…');
+  try{
+    if(id){ await col('tools').doc(id).update(data); }
+    else { await col('tools').doc(uid('t')).set({status:'in',holder:null,since:null,photo:null,...data}); }
+    await withTimeout(fdb.waitForPendingWrites(), 12000);   // wait for the SERVER to acknowledge
+    setConn(true); toast('✅ Saved & synced');
+  }catch(e){
+    console.error('saveTool', e);
+    toast(e&&e.message==='timeout' ? '⚠️ Saved on this phone but NOT synced — check signal, then tap ⟳' : '⚠️ Save failed — try again');
+  }
 }
 function delTool(id){ if(!confirm('Delete this tool?')) return; col('tools').doc(id).delete(); closeModal(); }
 

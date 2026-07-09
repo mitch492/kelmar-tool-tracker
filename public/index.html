@@ -354,6 +354,9 @@ async function refreshNow(manual){
   }catch(e){ console.warn('refresh',e); if(manual) toast('⚠️ Couldn’t refresh — check signal'); }
   finally{ refreshing=false; if(b) b.classList.remove('spinning'); }
 }
+// after any entry, force a quick sync so it lands in the cloud and everyone sees it fast (debounced)
+let _nudgeT;
+function nudge(){ clearTimeout(_nudgeT); _nudgeT=setTimeout(()=>refreshNow(), 700); }
 function startApp(){
   if(appStarted) return; appStarted=true;
   closeModal();
@@ -737,14 +740,14 @@ function doSignOut(toolId,personId,photo){
   const t=tool(toolId); const now=nowISO();
   col('tools').doc(toolId).update({status:'out',holder:personId,since:now,photo:photo||null});
   col('log').add({toolId,action:'out',personId,at:now,photo:photo||null});
-  closeModal();
+  closeModal(); nudge();
   toast(`📤 <span class="k">${esc(t.name)}</span> signed out to ${esc(person(personId).name)}`);
 }
 function doSignIn(toolId){
   const t=tool(toolId); const prev=t.holder;
   col('tools').doc(toolId).update({status:'in',holder:null,since:null,photo:null});
   col('log').add({toolId,action:'in',personId:prev,at:nowISO()});
-  closeModal();
+  closeModal(); nudge();
   toast(`📥 <span class="k">${esc(t.name)}</span> returned. Thanks!`);
 }
 function addPersonThenSignOut(toolId){
@@ -808,12 +811,12 @@ function submitRequest(){
   const personId=val('r-person'), item=val('r-item').trim(), qty=+val('r-qty')||1, unit=val('r-unit').trim()||'pcs';
   if(!item){ toast('⚠️ Enter what you need'); return; }
   col('requests').add({personId,item,qty,unit,at:nowISO(),status:'open'});
-  closeModal();
+  closeModal(); nudge();
   toast(`📨 <span class="k">${esc(person(personId).name)}</span>'s request sent to Mitch`);
   show('orders');
 }
 function fulfillRequest(id){
-  col('requests').doc(id).update({status:'done',doneAt:nowISO()});
+  col('requests').doc(id).update({status:'done',doneAt:nowISO()}); nudge();
   toast('✅ Marked as given');
 }
 
@@ -839,7 +842,7 @@ function saveTool(id){
   const data={name,code:val('f-code').trim()||nextCode(),category:val('f-cat').trim(),home:val('f-home').trim()};
   if(id){ col('tools').doc(id).update(data); }
   else { col('tools').doc(uid('t')).set({status:'in',holder:null,since:null,photo:null,...data}); }
-  closeModal(); toast('✅ Saved');
+  closeModal(); nudge(); toast('✅ Saved');
 }
 function delTool(id){ if(!confirm('Delete this tool?')) return; col('tools').doc(id).delete(); closeModal(); }
 
@@ -861,7 +864,7 @@ function saveVan(id){
   const owner=val('f-vowner')||null;
   if(id){ col('vans').doc(id).update({name,owner}); }
   else { col('vans').doc(uid('v')).set({name,owner,items:[]}); }
-  closeModal();
+  closeModal(); nudge();
 }
 function delVan(id){ if(!confirm('Delete this van and its stock list?')) return; col('vans').doc(id).delete(); closeModal(); }
 
@@ -888,7 +891,7 @@ function saveItem(vanId,itemId){
   const items=(v.items||[]).slice();
   if(itemId){ const i=items.findIndex(x=>x.id===itemId); if(i>=0) items[i]={...items[i],...data}; }
   else { items.push({id:uid('s'),...data}); }
-  col('vans').doc(vanId).update({items}); closeModal();
+  col('vans').doc(vanId).update({items}); closeModal(); nudge();
 }
 function delItem(vanId,itemId){
   const v=db.vans.find(x=>x.id===vanId); if(!v) return;
@@ -898,7 +901,7 @@ function delItem(vanId,itemId){
 function stock(vanId,itemId,delta){
   const v=db.vans.find(x=>x.id===vanId); if(!v) return;
   const items=(v.items||[]).map(i=> i.id===itemId ? {...i,qty:Math.max(0,i.qty+delta)} : i);
-  col('vans').doc(vanId).update({items});
+  col('vans').doc(vanId).update({items}); nudge();
 }
 
 /* ============ Order export ============ */

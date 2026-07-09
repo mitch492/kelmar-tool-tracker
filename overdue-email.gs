@@ -23,18 +23,21 @@ function sendOverdueEmail() {
 
   var now = new Date();
   var overdue = tools.filter(function (t) {
-    return t.status === 'out' && t.since && daysBetween_(new Date(t.since), now) >= OVERDUE_AFTER_DAYS;
+    if (t.status !== 'out') return false;
+    if (t.dueDate) return now.getTime() > new Date(t.dueDate).getTime() + 86400000;   // past its return-by date
+    return t.since && daysBetween_(new Date(t.since), now) >= OVERDUE_AFTER_DAYS;      // or out longer than the fallback
   }).sort(function (a, b) { return new Date(a.since) - new Date(b.since); });
 
   if (overdue.length === 0 && !SEND_WHEN_NONE) return;
 
   var rows = overdue.map(function (t) {
     var who = nameById[t.holder] || 'someone';
-    var days = daysBetween_(new Date(t.since), now);
+    var days = t.since ? daysBetween_(new Date(t.since), now) : 0;
     return '<tr>' +
       '<td style="padding:8px 10px;border-bottom:1px solid #eee;font-weight:600;">' + esc_(t.name) + '</td>' +
       '<td style="padding:8px 10px;border-bottom:1px solid #eee;">' + esc_(t.code || '') + '</td>' +
       '<td style="padding:8px 10px;border-bottom:1px solid #eee;">' + esc_(who) + '</td>' +
+      '<td style="padding:8px 10px;border-bottom:1px solid #eee;">' + esc_(t.job || '—') + '</td>' +
       '<td style="padding:8px 10px;border-bottom:1px solid #eee;color:#c62828;font-weight:700;">' + days + ' day' + (days === 1 ? '' : 's') + '</td>' +
     '</tr>';
   }).join('');
@@ -53,6 +56,7 @@ function sendOverdueEmail() {
               '<th style="text-align:left;padding:8px 10px;">Tool</th>' +
               '<th style="text-align:left;padding:8px 10px;">ID</th>' +
               '<th style="text-align:left;padding:8px 10px;">Who has it</th>' +
+              '<th style="text-align:left;padding:8px 10px;">Job</th>' +
               '<th style="text-align:left;padding:8px 10px;">Out for</th>' +
             '</tr>' + rows +
           '</table>'

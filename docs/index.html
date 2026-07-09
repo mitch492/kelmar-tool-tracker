@@ -564,7 +564,7 @@ function renderDashboard(){
     const face=t.photo?`<img src="${t.photo}" onclick="viewPhotoEl(this)" style="width:44px;height:44px;border-radius:9px;object-fit:cover;cursor:zoom-in;flex-shrink:0">`:`<div class="avatar">${p?initials(p.name):'?'}</div>`;
     return `<div class="row">${face}
       <div class="grow"><div class="name">${esc(t.name)}</div>
-      <div class="meta">${p?esc(p.name):'Unknown'} · ${timeAgo(t.since)}${overdue(t)?' · <b style="color:var(--warn)">overdue</b>':''}</div></div>
+      <div class="meta">${p?esc(p.name):'Unknown'}${t.job?' · <b>'+esc(t.job)+'</b>':''} · ${timeAgo(t.since)}${t.dueDate?' · back '+fmtDate(t.dueDate):''}${overdue(t)?' · <b style="color:var(--warn)">OVERDUE</b>':''}</div></div>
       <button class="btn sm ghost" onclick="openSign('${t.id}')">Return</button></div>`;
   }).join('') : `<div class="empty">✅ Every tool is in the garage.</div>`;
 
@@ -582,13 +582,14 @@ function renderDashboard(){
   const recent=[...db.log].reverse().slice(0,6);
   document.getElementById('dash-log').innerHTML = recent.length ? recent.map(l=>{
     const t=tool(l.toolId), p=person(l.personId);
-    const ico=l.photo?`<img src="${l.photo}" onclick="viewPhotoEl(this)" style="width:38px;height:38px;border-radius:8px;object-fit:cover;cursor:zoom-in;flex-shrink:0">`:`<div class="tool-ico">${l.action==='out'?'📤':'📥'}</div>`;
+    const ico=l.photo?`<img src="${l.photo}" onclick="viewPhotoEl(this)" style="width:38px;height:38px;border-radius:8px;object-fit:cover;cursor:zoom-in;flex-shrink:0">`:`<div class="tool-ico">${l.action==='out'?'📤':l.action==='in'?'📥':'🔀'}</div>`;
+    const lbl=l.action==='out'?'Signed out by':l.action==='in'?'Returned by':'Moved by';
     return `<div class="row">${ico}
       <div class="grow"><div class="name">${t?esc(t.name):'Tool'}</div>
-      <div class="meta">${l.action==='out'?'Signed out by':'Returned by'} ${p?esc(p.name):'—'} · ${timeAgo(l.at)}${l.photo?' · 📸':''}</div></div></div>`;
+      <div class="meta">${lbl} ${p?esc(p.name):'—'}${l.action==='move'&&l.job?' → '+esc(l.job):''} · ${timeAgo(l.at)}${l.photo?' · 📸':''}</div></div></div>`;
   }).join('') : `<div class="empty">No activity yet.</div>`;
 }
-function overdue(t){ if(t.status!=='out'||!t.since) return false; return (Date.now()-new Date(t.since))/86400000 > 5; }
+function overdue(t){ if(t.status!=='out') return false; if(t.dueDate) return Date.now() > new Date(t.dueDate).getTime()+86400000; return t.since && (Date.now()-new Date(t.since))/86400000 > 5; }
 
 function renderTools(){
   const q=(document.getElementById('tool-search')?.value||'').toLowerCase();
@@ -598,7 +599,7 @@ function renderTools(){
     const p=person(t.holder);
     return `<div class="row" onclick="toolDetail('${t.id}')" style="cursor:pointer">${t.img?`<img src="${t.img}" style="width:38px;height:38px;border-radius:10px;object-fit:cover;flex-shrink:0">`:`<div class="tool-ico">🔧</div>`}
       <div class="grow"><div class="name">${esc(t.name)}</div>
-      <div class="meta">${t.code} · ${esc(t.category||'')}${t.status==='out'&&p?' · with '+esc(p.name):''}</div></div>
+      <div class="meta">${t.code} · ${esc(t.category||'')}${t.status==='out'&&p?' · with '+esc(p.name)+(t.job?' · '+esc(t.job):''):''}</div></div>
       <span class="pill ${t.status}">${t.status==='out'?'OUT':'IN'}</span>
       <span style="color:var(--charcoal);font-size:18px;margin-left:4px">›</span></div>`;
   }).join('') : `<div class="empty"><div class="big">🔧</div>No tools yet. Add your first tool to get a QR code.</div>`;
@@ -611,7 +612,7 @@ function renderScanList(){
     return `<div class="row" onclick="openSign('${t.id}')" style="cursor:pointer">
       ${t.img?`<img src="${t.img}" style="width:38px;height:38px;border-radius:10px;object-fit:cover;flex-shrink:0">`:`<div class="tool-ico">🔧</div>`}
       <div class="grow"><div class="name">${esc(t.name)}</div>
-      <div class="meta">${t.code}${t.status==='out'&&p?' · with '+esc(p.name):''}</div></div>
+      <div class="meta">${t.code}${t.status==='out'&&p?' · with '+esc(p.name)+(t.job?' · '+esc(t.job):''):''}</div></div>
       <span class="pill ${t.status}">${t.status==='out'?'OUT':'IN'}</span></div>`;
   }).join('');
 }
@@ -698,31 +699,81 @@ function openSign(toolId){
   const t=tool(toolId); if(!t) return;
   let body;
   if(t.status==='in'){
-    body=`<h3>Sign out: ${esc(t.name)}</h3><p class="sub" style="margin:2px 0 14px">${t.code} · who's taking it?</p>
-      <div id="people-pick">${db.people.map(p=>`
-        <button class="btn ghost block" style="text-align:left; margin-bottom:8px; display:flex; align-items:center; gap:10px"
-          onclick="startSignOut('${t.id}','${p.id}')">
-          <span class="avatar">${initials(p.name)}</span> ${esc(p.name)}</button>`).join('')}
-      </div>
-      <button class="btn sm ghost block" onclick="addPersonThenSignOut('${t.id}')">+ Add a person</button>`;
+    const jobs=[...new Set(db.tools.map(x=>x.job).filter(Boolean))];
+    const contents = t.notes ? `<div class="card" style="box-shadow:none;background:var(--grey);margin:0 0 12px;padding:10px 12px">
+      <div class="lab" style="margin-bottom:4px">📦 In the box / accessories</div>
+      <div style="font-size:13px;white-space:pre-wrap;color:var(--ink)">${esc(t.notes)}</div>
+      <div class="sub" style="margin:6px 0 0;font-size:11px">Check it's all there — you're accountable for these too.</div></div>` : '';
+    body=`<h3>Sign out: ${esc(t.name)}</h3><p class="sub" style="margin:2px 0 12px">${t.code}</p>
+      ${contents}
+      <label class="field"><span class="lab">Who's taking it?</span>
+        <select id="f-person">${db.people.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>
+      <button class="btn ghost sm" style="margin:-6px 0 12px" onclick="addPersonInline('${t.id}')">+ Add a crew member</button>
+      <label class="field"><span class="lab">Going to which job?</span>
+        <input id="f-job" list="joblist" placeholder="Job name / number (or leave blank)">
+        <datalist id="joblist">${jobs.map(j=>`<option>${esc(j)}</option>`).join('')}</datalist></label>
+      <label class="field"><span class="lab">Back by? (optional)</span>
+        <input id="f-due" type="date">
+        <div class="btn-row" style="margin-top:6px">
+          <button type="button" class="btn ghost sm" onclick="setDue(1)">Tomorrow</button>
+          <button type="button" class="btn ghost sm" onclick="setDue(3)">3 days</button>
+          <button type="button" class="btn ghost sm" onclick="setDue(7)">1 week</button>
+          <button type="button" class="btn ghost sm" onclick="setDue(14)">2 weeks</button>
+        </div></label>
+      <button class="btn block" onclick="continueSignOut('${t.id}')">Continue → take photo 📷</button>`;
   } else {
     const p=person(t.holder);
     const ph=t.photo?`<img src="${t.photo}" onclick="viewPhotoEl(this)" style="width:100%;border-radius:12px;margin:6px 0 12px;cursor:zoom-in">`:'';
-    body=`<h3>Return: ${esc(t.name)}</h3>
-      <p class="sub" style="margin:2px 0 10px">${t.code} · currently with <b>${p?esc(p.name):'someone'}</b> (${timeAgo(t.since)})</p>
+    body=`<h3>Return / move: ${esc(t.name)}</h3>
+      <p class="sub" style="margin:2px 0 10px">${t.code} · with <b>${p?esc(p.name):'someone'}</b>${t.job?' on <b>'+esc(t.job)+'</b>':''} (${timeAgo(t.since)})${t.dueDate?' · back by '+fmtDate(t.dueDate):''}</p>
       ${ph}
-      <button class="btn block" onclick="doSignIn('${t.id}')">📥 Check it back in</button>`;
+      <button class="btn block" onclick="doSignIn('${t.id}')">📥 Check it back in</button>
+      <button class="btn ghost block" style="margin-top:8px" onclick="openMove('${t.id}')">🔀 Move to another job</button>`;
   }
   modal(body);
+}
+function setDue(days){ const el=document.getElementById('f-due'); if(!el) return; const d=new Date(); d.setDate(d.getDate()+days); el.value=[d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-'); }
+function fmtDate(d){ try{ return new Date(d).toLocaleDateString('en-AU',{day:'2-digit',month:'short'}); }catch(e){ return d; } }
+function continueSignOut(toolId){
+  const personId=val('f-person'); if(!personId){ toast('⚠️ Pick who\'s taking it'); return; }
+  startSignOut(toolId, {personId, job:(val('f-job')||'').trim(), due:val('f-due')||''});
+}
+function addPersonInline(toolId){
+  const name=prompt('New crew member name:'); if(!name) return;
+  const id=uid('p'); db.people.push({id,name:name.trim()}); col('people').doc(id).set({name:name.trim()}); nudge();
+  openSign(toolId);
+}
+function openMove(toolId){
+  const t=tool(toolId); const jobs=[...new Set(db.tools.map(x=>x.job).filter(Boolean))];
+  modal(`<h3>Move to another job</h3>
+    <p class="sub" style="margin:2px 0 12px">${esc(t.name)} — on <b>${t.job?esc(t.job):'no job'}</b> with <b>${person(t.holder)?esc(person(t.holder).name):'someone'}</b></p>
+    <label class="field"><span class="lab">New job</span><input id="m-job" list="joblist2" placeholder="Job name / number">
+      <datalist id="joblist2">${jobs.map(j=>`<option>${esc(j)}</option>`).join('')}</datalist></label>
+    <label class="field"><span class="lab">Now with</span>
+      <select id="m-person">${db.people.map(p=>`<option value="${p.id}" ${p.id===t.holder?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>
+    <button class="btn block" onclick="doMove('${toolId}')">Move it</button>
+    <button class="btn ghost block" style="margin-top:8px" onclick="openSign('${toolId}')">← Back</button>`);
+}
+async function doMove(toolId){
+  const t=tool(toolId); const job=(val('m-job')||'').trim(), personId=val('m-person');
+  if(!job){ toast('⚠️ Enter the new job'); return; }
+  if(!auth.currentUser){ toast('⚠️ Still connecting — try again'); return; }
+  closeModal();
+  try{
+    await col('tools').doc(toolId).update({job, holder:personId, since:nowISO()});
+    col('log').add({toolId,action:'move',personId,at:nowISO(),job});
+    await withTimeout(fdb.waitForPendingWrites(),12000); setConn(true);
+    toast(`🔀 <span class="k">${esc(t.name)}</span> moved to ${esc(job)}`);
+  }catch(e){ console.error('move',e); toast('⚠️ Not synced — check signal, then tap ⟳'); }
 }
 
 /* --- photo capture step --- */
 let pendingSignOut=null, captureStream=null, capturedPhoto=null;
-function startSignOut(toolId,personId){
-  pendingSignOut={toolId,personId}; capturedPhoto=null;
-  const t=tool(toolId), p=person(personId);
+function startSignOut(toolId,opts){
+  pendingSignOut={toolId,...opts}; capturedPhoto=null;
+  const t=tool(toolId), p=person(opts.personId);
   modal(`<h3>Photo for the record</h3>
-    <p class="sub" style="margin:2px 0 12px"><b>${esc(p.name)}</b> taking <b>${esc(t.name)}</b>. Snap a quick photo — it's stamped with the date & time.</p>
+    <p class="sub" style="margin:2px 0 12px"><b>${esc(p.name)}</b> taking <b>${esc(t.name)}</b>${opts.job?' to <b>'+esc(opts.job)+'</b>':''}. Snap a quick photo — it's stamped with the date & time.</p>
     <video id="cap-video" autoplay playsinline muted style="width:100%;border-radius:14px;background:#111;aspect-ratio:4/3;object-fit:cover"></video>
     <canvas id="cap-canvas" class="hidden"></canvas>
     <div id="cap-preview"></div>
@@ -755,27 +806,28 @@ function takePhoto(){
   document.getElementById('cap-preview').innerHTML=`<img src="${capturedPhoto}" style="width:100%;border-radius:14px">`;
   document.getElementById('cap-buttons').innerHTML=
     `<button class="btn" onclick="finishSignOut(capturedPhoto)">✅ Use photo & sign out</button>
-     <button class="btn ghost" onclick="startSignOut(pendingSignOut.toolId,pendingSignOut.personId)">↺ Retake</button>`;
+     <button class="btn ghost" onclick="startSignOut(pendingSignOut.toolId,pendingSignOut)">↺ Retake</button>`;
 }
 function finishSignOut(photo){
   stopCaptureCamera();
   const ps=pendingSignOut; if(!ps) return;
   pendingSignOut=null; capturedPhoto=null;
-  doSignOut(ps.toolId,ps.personId,photo);
+  doSignOut(ps,photo);
 }
 function cancelCapture(){ stopCaptureCamera(); pendingSignOut=null; capturedPhoto=null; closeModal(); }
 function stopCaptureCamera(){ if(captureStream){ captureStream.getTracks().forEach(t=>t.stop()); captureStream=null; } }
 
-async function doSignOut(toolId,personId,photo){
+async function doSignOut(opts,photo){
+  const {toolId,personId,job,due}=opts;
   const t=tool(toolId); const now=nowISO();
   if(!auth.currentUser){ toast('⚠️ Still connecting — try again in a sec'); return; }
   closeModal();
   try{
-    await col('tools').doc(toolId).update({status:'out',holder:personId,since:now,photo:photo||null});
-    col('log').add({toolId,action:'out',personId,at:now,photo:photo||null});
+    await col('tools').doc(toolId).update({status:'out',holder:personId,since:now,job:job||null,dueDate:due||null,photo:photo||null});
+    col('log').add({toolId,action:'out',personId,at:now,job:job||null,dueDate:due||null,photo:photo||null});
     await withTimeout(fdb.waitForPendingWrites(), 12000);
     setConn(true);
-    toast(`📤 <span class="k">${esc(t.name)}</span> signed out to ${esc(person(personId).name)}`);
+    toast(`📤 <span class="k">${esc(t.name)}</span> to ${esc(person(personId).name)}${job?' · '+esc(job):''}`);
   }catch(e){ console.error('signOut',e); toast('⚠️ Not synced — check signal, then tap ⟳'); }
 }
 async function doSignIn(toolId){
@@ -789,13 +841,6 @@ async function doSignIn(toolId){
     setConn(true);
     toast(`📥 <span class="k">${esc(t.name)}</span> returned. Thanks!`);
   }catch(e){ console.error('signIn',e); toast('⚠️ Not synced — check signal, then tap ⟳'); }
-}
-function addPersonThenSignOut(toolId){
-  const name=prompt('New person / crew member name:');
-  if(!name) return;
-  const id=uid('p'); db.people.push({id,name:name.trim()});   // optimistic; syncs to cloud
-  col('people').doc(id).set({name:name.trim()});
-  startSignOut(toolId,id);
 }
 function viewPhotoEl(el){ viewPhoto(el.src); }
 function viewPhoto(src){
@@ -814,19 +859,23 @@ function toolDetail(toolId){
          <div class="row" style="border:none;padding:0">
            ${t.photo?`<img src="${t.photo}" onclick="viewPhotoEl(this)" style="width:56px;height:56px;border-radius:10px;object-fit:cover;cursor:zoom-in;flex-shrink:0">`:`<div class="avatar">${p?initials(p.name):'?'}</div>`}
            <div class="grow"><div class="name">Out with ${p?esc(p.name):'someone'}</div>
-           <div class="meta">Taken ${timeAgo(t.since)}${overdue(t)?' · <b style="color:var(--warn)">overdue</b>':''}</div></div>
+           <div class="meta">${t.job?'On <b>'+esc(t.job)+'</b> · ':''}Taken ${timeAgo(t.since)}${t.dueDate?' · back by '+fmtDate(t.dueDate):''}${overdue(t)?' · <b style="color:var(--warn)">OVERDUE</b>':''}</div></div>
          </div></div>`
     : `<p class="sub" style="margin:2px 0 12px">✅ In the ${esc(t.home||'shed')} right now.</p>`;
+  const notesBlock = t.notes ? `<div class="card" style="box-shadow:none;background:var(--grey);margin-bottom:12px;padding:10px 12px"><div class="lab" style="margin-bottom:4px">📦 In the box / accessories</div><div style="font-size:13px;white-space:pre-wrap">${esc(t.notes)}</div></div>` : '';
   const hist=db.log.filter(l=>l.toolId===toolId).slice(-8).reverse();
   const history = hist.length ? `<h3 style="font-size:14px;font-weight:800;margin:16px 0 4px">History</h3>`+hist.map(l=>{
       const pp=person(l.personId);
-      return `<div class="row">${l.photo?`<img src="${l.photo}" onclick="viewPhotoEl(this)" style="width:36px;height:36px;border-radius:8px;object-fit:cover;cursor:zoom-in;flex-shrink:0">`:`<div class="tool-ico">${l.action==='out'?'📤':'📥'}</div>`}
-        <div class="grow"><div class="name" style="font-size:14px">${l.action==='out'?'Taken by':'Returned by'} ${pp?esc(pp.name):'—'}</div>
+      const icon=l.action==='out'?'📤':l.action==='in'?'📥':'🔀';
+      const label=l.action==='out'?('Taken by '+(pp?esc(pp.name):'—')+(l.job?' → '+esc(l.job):'')) : l.action==='in'?('Returned by '+(pp?esc(pp.name):'—')) : ('Moved to '+esc(l.job||'job')+(pp?' · '+esc(pp.name):''));
+      return `<div class="row">${l.photo?`<img src="${l.photo}" onclick="viewPhotoEl(this)" style="width:36px;height:36px;border-radius:8px;object-fit:cover;cursor:zoom-in;flex-shrink:0">`:`<div class="tool-ico">${icon}</div>`}
+        <div class="grow"><div class="name" style="font-size:14px">${label}</div>
         <div class="meta">${new Date(l.at).toLocaleString('en-AU',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</div></div></div>`;
     }).join('') : '';
   modal(`<h3>${esc(t.name)}</h3><p class="sub" style="margin:2px 0 12px">${t.code} · ${esc(t.category||'')}</p>
     ${cur}
-    <button class="btn block" onclick="openSign('${t.id}')">${t.status==='out'?'📥 Return this tool':'📤 Sign it out'}</button>
+    ${notesBlock}
+    <button class="btn block" onclick="openSign('${t.id}')">${t.status==='out'?'📥 Return / move':'📤 Sign it out'}</button>
     ${history}
     <button class="btn ghost block" style="margin-top:12px" onclick="editTool('${t.id}')">Edit tool details</button>`);
 }
@@ -904,6 +953,9 @@ function editTool(id, keep){
       <datalist id="cats">${[...new Set(db.tools.map(x=>x.category).filter(Boolean))].map(c=>`<option>${esc(c)}</option>`).join('')}</datalist></label>
     <label class="field"><span class="lab">Home location</span><input id="f-home" value="${esc(cur.home||'Garage')}" placeholder="Garage / Office" list="homes">
       <datalist id="homes"><option>Garage</option><option>Office</option></datalist></label>
+    <label class="field"><span class="lab">📦 What's in the box / accessories (optional)</span>
+      <textarea id="f-notes" rows="3" placeholder="One per line, e.g.&#10;Needle point&#10;Chisel point">${esc(cur.notes||'')}</textarea>
+      <span class="sub" style="font-size:11px">Listed here so the boys know what to bring back — flagged at sign-out.</span></label>
     <span class="lab" style="font-size:12px;font-weight:600;color:var(--charcoal)">Photo of the tool</span>
     <div id="tool-photo-preview" style="margin:5px 0 8px">${_toolImg?`<img src="${_toolImg}" style="width:100%;max-height:200px;object-fit:cover;border-radius:12px">`:''}</div>
     <button class="btn ghost block" onclick="captureToolPhoto('${id||''}')">${_toolImg?'📷 Replace photo':'📷 Take a photo of the tool'}</button>
@@ -914,7 +966,7 @@ function editTool(id, keep){
     </div>`);
 }
 function captureToolPhoto(id){
-  const draft={name:val('f-name'),code:val('f-code'),category:val('f-cat'),home:val('f-home'),img:_toolImg};
+  const draft={name:val('f-name'),code:val('f-code'),category:val('f-cat'),home:val('f-home'),notes:val('f-notes'),img:_toolImg};
   openCamera('Point the camera at the tool and take a clear photo.', data=>{ if(data) draft.img=data; editTool(id||null, draft); });
 }
 async function saveTool(id){
@@ -922,7 +974,7 @@ async function saveTool(id){
   if(!auth.currentUser){ toast('⚠️ Still connecting — give it a sec and try again'); return; }
   let img=_toolImg||null;
   if(img && img.length>800000){ img=null; toast('⚠️ Photo too big — saving the tool without it'); }
-  const data={name,code:val('f-code').trim()||nextCode(),category:val('f-cat').trim(),home:val('f-home').trim(),img};
+  const data={name,code:val('f-code').trim()||nextCode(),category:val('f-cat').trim(),home:val('f-home').trim(),notes:(val('f-notes')||'').trim()||null,img};
   closeModal(); toast('Saving…');
   try{
     if(id){ await col('tools').doc(id).update(data); }

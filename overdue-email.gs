@@ -75,14 +75,46 @@ function sendOverdueEmail() {
   });
 }
 
-// ===== Run this ONCE to schedule the daily email =====
+// ===== Instant "tool reported missing" alert (checked every few minutes) =====
+function checkMissing() {
+  var token = anonToken_();
+  var pending = fetchCollection_('missing', token).filter(function (m) {
+    return m.status !== 'resolved' && m.notified !== true;
+  });
+  pending.forEach(function (m) {
+    var body = '<div style="font-family:Arial,sans-serif;color:#1A1A1A;max-width:560px;">' +
+      '<div style="background:#c62828;padding:14px 16px;"><span style="color:#fff;font-size:18px;font-weight:800;">&#9888;&#65039; Tool reported MISSING</span></div>' +
+      '<div style="padding:16px;">' +
+        '<p style="margin:0 0 8px;font-size:16px;"><b>' + esc_(m.toolName) + '</b>' + (m.code ? ' (' + esc_(m.code) + ')' : '') + '</p>' +
+        '<p style="margin:0 0 4px;">Last had by: <b style="color:#c62828;">' + esc_(m.lastHolderName || '—') + '</b></p>' +
+        (m.reporterName ? '<p style="margin:0 0 4px;">Reported by: ' + esc_(m.reporterName) + '</p>' : '') +
+        (m.job ? '<p style="margin:0 0 4px;">Job: ' + esc_(m.job) + '</p>' : '') +
+        (m.note ? '<p style="margin:8px 0 0;padding:8px;background:#f5f5f5;border-radius:6px;">' + esc_(m.note) + '</p>' : '') +
+        '<p style="margin:16px 0 0;font-size:13px;">Follow up: <a href="https://mitch492.github.io/kelmar-tool-tracker/#admin" style="color:#F5A800;font-weight:700;">Open the tracker</a></p>' +
+      '</div></div>';
+    MailApp.sendEmail({ to: EMAIL_TO, subject: '⚠️ MISSING: ' + m.toolName + ' — last had by ' + (m.lastHolderName || '?'), htmlBody: body });
+    patchDoc_('missing/' + m.id, token);   // mark notified so it isn't emailed again
+  });
+}
+function patchDoc_(path, token) {
+  UrlFetchApp.fetch(BASE + '/' + path + '?updateMask.fieldPaths=notified', {
+    method: 'patch', contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + token },
+    payload: JSON.stringify({ fields: { notified: { booleanValue: true } } }),
+    muteHttpExceptions: true
+  });
+}
+
+// ===== Run this ONCE to schedule both emails =====
 function setupDailyTrigger() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'sendOverdueEmail') ScriptApp.deleteTrigger(t);
+    var h = t.getHandlerFunction();
+    if (h === 'sendOverdueEmail' || h === 'checkMissing') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('sendOverdueEmail')
-    .timeBased().everyDays(1).atHour(SEND_HOUR).inTimezone('Australia/Melbourne')
-    .create();
+    .timeBased().everyDays(1).atHour(SEND_HOUR).inTimezone('Australia/Melbourne').create();
+  ScriptApp.newTrigger('checkMissing')       // instant missing-tool alerts, every 5 min
+    .timeBased().everyMinutes(5).create();
 }
 
 // ===== helpers (leave alone) =====

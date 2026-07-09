@@ -198,6 +198,11 @@ nav button{position:relative}
     <div class="view-title"><div class="bar"></div><h2>Dashboard</h2></div>
     <div class="stats" id="dash-stats"></div>
 
+    <div class="card" id="dash-missing-card" style="border:2px solid var(--warn); display:none">
+      <div class="sec-head"><h3 style="color:var(--warn)">⚠️ Reported missing</h3></div>
+      <div id="dash-missing"></div>
+    </div>
+
     <div class="card">
       <div class="sec-head"><h3>Currently out</h3><span class="tag" id="out-count"></span></div>
       <div id="dash-out"></div>
@@ -332,9 +337,9 @@ const fdb = firebase.firestore();
 fdb.settings({ experimentalForceLongPolling: true });
 fdb.enablePersistence({ synchronizeTabs:true }).catch(()=>{});   // offline / patchy signal
 function withTimeout(p, ms){ return Promise.race([Promise.resolve(p), new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')), ms))]); }
-const COLS = ['people','tools','vans','requests','log'];
+const COLS = ['people','tools','vans','requests','log','missing'];
 
-let db = { people:[], tools:[], vans:[], requests:[], log:[] };
+let db = { people:[], tools:[], vans:[], requests:[], log:[], missing:[] };
 let seedCounter=0;
 function uid(p){ return p+Math.random().toString(36).slice(2,8)+(seedCounter++); }
 function nowISO(){ return new Date().toISOString(); }
@@ -559,6 +564,16 @@ function renderDashboard(){
     <div class="stat ${low.length?'warn':''}"><div class="n">${low.length}</div><div class="l">Low on stock</div></div>`;
   document.getElementById('out-count').textContent=out.length+' out';
 
+  const missing=(db.missing||[]).filter(m=>m.status!=='resolved');
+  const mcard=document.getElementById('dash-missing-card');
+  if(mcard) mcard.style.display = missing.length ? '' : 'none';
+  const mel=document.getElementById('dash-missing');
+  if(mel) mel.innerHTML = missing.map(m=>`
+    <div class="row"><div class="tool-ico">⚠️</div>
+      <div class="grow"><div class="name">${esc(m.toolName)}${m.code?' ('+esc(m.code)+')':''}</div>
+      <div class="meta">Last had by <b>${esc(m.lastHolderName||'—')}</b>${m.note?' · '+esc(m.note):''} · ${timeAgo(m.at)}</div></div>
+      ${isAdmin()?`<button class="btn sm ghost" onclick="resolveMissing('${m.id}')">Resolve</button>`:''}</div>`).join('');
+
   document.getElementById('dash-out').innerHTML = out.length ? out.map(t=>{
     const p=person(t.holder);
     const face=t.photo?`<img src="${t.photo}" onclick="viewPhotoEl(this)" style="width:44px;height:44px;border-radius:9px;object-fit:cover;cursor:zoom-in;flex-shrink:0">`:`<div class="avatar">${p?initials(p.name):'?'}</div>`;
@@ -582,8 +597,8 @@ function renderDashboard(){
   const recent=[...db.log].reverse().slice(0,6);
   document.getElementById('dash-log').innerHTML = recent.length ? recent.map(l=>{
     const t=tool(l.toolId), p=person(l.personId);
-    const ico=l.photo?`<img src="${l.photo}" onclick="viewPhotoEl(this)" style="width:38px;height:38px;border-radius:8px;object-fit:cover;cursor:zoom-in;flex-shrink:0">`:`<div class="tool-ico">${l.action==='out'?'📤':l.action==='in'?'📥':'🔀'}</div>`;
-    const lbl=l.action==='out'?'Signed out by':l.action==='in'?'Returned by':'Moved by';
+    const ico=l.photo?`<img src="${l.photo}" onclick="viewPhotoEl(this)" style="width:38px;height:38px;border-radius:8px;object-fit:cover;cursor:zoom-in;flex-shrink:0">`:`<div class="tool-ico">${l.action==='out'?'📤':l.action==='in'?'📥':l.action==='missing'?'⚠️':'🔀'}</div>`;
+    const lbl=l.action==='out'?'Signed out by':l.action==='in'?'Returned by':l.action==='missing'?'Reported missing by':'Moved by';
     return `<div class="row">${ico}
       <div class="grow"><div class="name">${t?esc(t.name):'Tool'}</div>
       <div class="meta">${lbl} ${p?esc(p.name):'—'}${l.action==='move'&&l.job?' → '+esc(l.job):''} · ${timeAgo(l.at)}${l.photo?' · 📸':''}</div></div></div>`;
@@ -700,9 +715,11 @@ function openSign(toolId){
   let body;
   if(t.status==='in'){
     const jobs=[...new Set(db.tools.map(x=>x.job).filter(Boolean))];
-    const contents = t.notes ? `<div class="card" style="box-shadow:none;background:var(--grey);margin:0 0 12px;padding:10px 12px">
+    const citems=(t.contents||[]);
+    const contents = (citems.length || t.notes) ? `<div class="card" style="box-shadow:none;background:var(--grey);margin:0 0 12px;padding:10px 12px">
       <div class="lab" style="margin-bottom:4px">📦 In the box / accessories</div>
-      <div style="font-size:13px;white-space:pre-wrap;color:var(--ink)">${esc(t.notes)}</div>
+      ${t.notes?`<div style="font-size:13px;white-space:pre-wrap;color:var(--ink)">${esc(t.notes)}</div>`:''}
+      ${citems.map(c=>`<div style="font-size:13px;color:var(--ink)">• ${esc(c)}</div>`).join('')}
       <div class="sub" style="margin:6px 0 0;font-size:11px">Check it's all there — you're accountable for these too.</div></div>` : '';
     body=`<h3>Sign out: ${esc(t.name)}</h3><p class="sub" style="margin:2px 0 12px">${t.code}</p>
       ${contents}
@@ -862,12 +879,18 @@ function toolDetail(toolId){
            <div class="meta">${t.job?'On <b>'+esc(t.job)+'</b> · ':''}Taken ${timeAgo(t.since)}${t.dueDate?' · back by '+fmtDate(t.dueDate):''}${overdue(t)?' · <b style="color:var(--warn)">OVERDUE</b>':''}</div></div>
          </div></div>`
     : `<p class="sub" style="margin:2px 0 12px">✅ In the ${esc(t.home||'shed')} right now.</p>`;
-  const notesBlock = t.notes ? `<div class="card" style="box-shadow:none;background:var(--grey);margin-bottom:12px;padding:10px 12px"><div class="lab" style="margin-bottom:4px">📦 In the box / accessories</div><div style="font-size:13px;white-space:pre-wrap">${esc(t.notes)}</div></div>` : '';
+  const citems=(t.contents||[]);
+  const notesBlock = `<div class="card" style="box-shadow:none;background:var(--grey);margin-bottom:12px;padding:10px 12px">
+    <div class="lab" style="margin-bottom:4px">📦 In the box / accessories</div>
+    ${t.notes?`<div style="font-size:13px;white-space:pre-wrap">${esc(t.notes)}</div>`:''}
+    ${citems.length?citems.map(c=>`<div style="font-size:13px;padding:1px 0">• ${esc(c)}</div>`).join(''):(t.notes?'':'<div class="sub" style="font-size:12px">Nothing listed yet.</div>')}
+    <button class="btn ghost sm" style="margin-top:8px" onclick="addContentDetail('${t.id}')">＋ Add an item</button>
+    <span class="sub" style="font-size:11px;display:block;margin-top:4px">Add-only — items can't be removed.</span></div>`;
   const hist=db.log.filter(l=>l.toolId===toolId).slice(-8).reverse();
   const history = hist.length ? `<h3 style="font-size:14px;font-weight:800;margin:16px 0 4px">History</h3>`+hist.map(l=>{
       const pp=person(l.personId);
-      const icon=l.action==='out'?'📤':l.action==='in'?'📥':'🔀';
-      const label=l.action==='out'?('Taken by '+(pp?esc(pp.name):'—')+(l.job?' → '+esc(l.job):'')) : l.action==='in'?('Returned by '+(pp?esc(pp.name):'—')) : ('Moved to '+esc(l.job||'job')+(pp?' · '+esc(pp.name):''));
+      const icon=l.action==='out'?'📤':l.action==='in'?'📥':l.action==='missing'?'⚠️':'🔀';
+      const label=l.action==='out'?('Taken by '+(pp?esc(pp.name):'—')+(l.job?' → '+esc(l.job):'')) : l.action==='in'?('Returned by '+(pp?esc(pp.name):'—')) : l.action==='missing'?('Reported missing'+(pp?' by '+esc(pp.name):'')) : ('Moved to '+esc(l.job||'job')+(pp?' · '+esc(pp.name):''));
       return `<div class="row">${l.photo?`<img src="${l.photo}" onclick="viewPhotoEl(this)" style="width:36px;height:36px;border-radius:8px;object-fit:cover;cursor:zoom-in;flex-shrink:0">`:`<div class="tool-ico">${icon}</div>`}
         <div class="grow"><div class="name" style="font-size:14px">${label}</div>
         <div class="meta">${new Date(l.at).toLocaleString('en-AU',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</div></div></div>`;
@@ -876,9 +899,47 @@ function toolDetail(toolId){
     ${cur}
     ${notesBlock}
     <button class="btn block" onclick="openSign('${t.id}')">${t.status==='out'?'📥 Return / move':'📤 Sign it out'}</button>
+    <button class="btn ghost block danger" style="margin-top:8px" onclick="reportMissing('${t.id}')">⚠️ Report missing / issue</button>
     ${history}
     <button class="btn ghost block" style="margin-top:12px" onclick="editTool('${t.id}')">Edit tool details</button>`);
 }
+/* --- report missing → emails Mitch (via the morning-email Apps Script) --- */
+function lastHolder(toolId){
+  const t=tool(toolId);
+  if(t && t.status==='out' && t.holder) return t.holder;
+  const outs=db.log.filter(l=>l.toolId===toolId && (l.action==='out'||l.action==='move'));
+  return outs.length ? outs[outs.length-1].personId : (t?t.holder:null);
+}
+function reportMissing(toolId){
+  const t=tool(toolId); const lhId=lastHolder(toolId); const lh=person(lhId);
+  modal(`<h3>⚠️ Report missing / issue</h3>
+    <p class="sub" style="margin:2px 0 12px">${esc(t.name)} · ${t.code}</p>
+    <div class="card" style="box-shadow:none;background:#fdecea;padding:10px 12px;margin-bottom:12px">
+      <div class="lab" style="margin-bottom:2px;color:var(--warn)">Last had by</div>
+      <div style="font-weight:800;font-size:16px">${lh?esc(lh.name):'— unknown —'}</div></div>
+    <label class="field"><span class="lab">Who's reporting it? (optional)</span>
+      <select id="mr-person"><option value="">—</option>${db.people.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>
+    <label class="field"><span class="lab">What's missing / what happened?</span>
+      <textarea id="mr-note" rows="3" placeholder="e.g. Chisel point not in the box, or tool never came back"></textarea></label>
+    <button class="btn block danger" onclick="submitMissing('${toolId}','${lhId||''}')">Report it & alert Mitch</button>
+    <button class="btn ghost block" style="margin-top:8px" onclick="toolDetail('${toolId}')">← Back</button>`);
+}
+async function submitMissing(toolId, lastHolderId){
+  const t=tool(toolId);
+  if(!auth.currentUser){ toast('⚠️ Still connecting — try again'); return; }
+  const reporterId=val('mr-person')||null, note=(val('mr-note')||'').trim();
+  const lh=person(lastHolderId);
+  closeModal();
+  try{
+    await col('missing').add({toolId, toolName:t.name, code:t.code||'', lastHolderId:lastHolderId||null,
+      lastHolderName:lh?lh.name:'—', reporterId, reporterName:reporterId?(person(reporterId)?.name||''):'',
+      note, job:t.job||null, at:nowISO(), status:'open', notified:false});
+    col('log').add({toolId,action:'missing',personId:reporterId,at:nowISO(),note});
+    await withTimeout(fdb.waitForPendingWrites(),12000); setConn(true);
+    toast(`⚠️ Reported — Mitch will be emailed. Last had by ${lh?esc(lh.name):'—'}`);
+  }catch(e){ console.error('missing',e); toast('⚠️ Not synced — check signal, then tap ⟳'); }
+}
+function resolveMissing(id){ col('missing').doc(id).update({status:'resolved',resolvedAt:nowISO()}); nudge(); toast('✅ Resolved'); }
 
 /* --- crew supply requests: "give Dalton 10 boxes" --- */
 function openRequest(personId){
@@ -910,7 +971,7 @@ function fulfillRequest(id){
 }
 
 /* ===== reusable camera (tool photos, rear-facing) ===== */
-let _toolImg=null, _camStream=null, _camData=null, _camDone=null;
+let _toolImg=null, _toolContents=[], _camStream=null, _camData=null, _camDone=null;
 function openCamera(subtitle, onDone){
   _camData=null; _camDone=onDone;
   modal(`<h3>Photo of the tool</h3><p class="sub" style="margin:2px 0 12px">${esc(subtitle||'')}</p>
@@ -945,6 +1006,7 @@ function editTool(id, keep){
   const t=id?tool(id):null;
   const cur = keep || t || {code:nextCode(),name:'',category:'',home:'Garage'};
   _toolImg = keep ? (keep.img||null) : (t? (t.img||null) : null);
+  _toolContents = (keep ? keep.contents : (t? t.contents : [])) || [];
   modal(`
     <h3>${id?'Edit tool':'Add tool'}</h3>
     <label class="field" style="margin-top:14px"><span class="lab">Tool name</span><input id="f-name" value="${esc(cur.name||'')}" placeholder="e.g. Demolition saw"></label>
@@ -953,9 +1015,13 @@ function editTool(id, keep){
       <datalist id="cats">${[...new Set(db.tools.map(x=>x.category).filter(Boolean))].map(c=>`<option>${esc(c)}</option>`).join('')}</datalist></label>
     <label class="field"><span class="lab">Home location</span><input id="f-home" value="${esc(cur.home||'Garage')}" placeholder="Garage / Office" list="homes">
       <datalist id="homes"><option>Garage</option><option>Office</option></datalist></label>
-    <label class="field"><span class="lab">📦 What's in the box / accessories (optional)</span>
-      <textarea id="f-notes" rows="3" placeholder="One per line, e.g.&#10;Needle point&#10;Chisel point">${esc(cur.notes||'')}</textarea>
-      <span class="sub" style="font-size:11px">Listed here so the boys know what to bring back — flagged at sign-out.</span></label>
+    <span class="lab" style="font-size:12px;font-weight:600;color:var(--charcoal)">📦 What's in the box / accessories</span>
+    <div id="contents-list" style="margin:5px 0 6px">${_toolContents.length?_toolContents.map(c=>`<div style="font-size:14px;padding:3px 0">• ${esc(c)}</div>`).join(''):'<div class="sub" style="font-size:12px">Nothing listed yet.</div>'}</div>
+    <div style="display:flex;gap:8px">
+      <input id="f-content-add" placeholder="Add an item, e.g. Chisel point" onkeydown="if(event.key==='Enter'){addContentEdit('${id||''}');event.preventDefault();}">
+      <button type="button" class="btn ghost" onclick="addContentEdit('${id||''}')">＋ Add</button>
+    </div>
+    <span class="sub" style="font-size:11px;display:block;margin-bottom:8px">Add-only — once listed, an item can't be removed. Anyone can add more later.</span>
     <span class="lab" style="font-size:12px;font-weight:600;color:var(--charcoal)">Photo of the tool</span>
     <div id="tool-photo-preview" style="margin:5px 0 8px">${_toolImg?`<img src="${_toolImg}" style="width:100%;max-height:200px;object-fit:cover;border-radius:12px">`:''}</div>
     <button class="btn ghost block" onclick="captureToolPhoto('${id||''}')">${_toolImg?'📷 Replace photo':'📷 Take a photo of the tool'}</button>
@@ -966,15 +1032,28 @@ function editTool(id, keep){
     </div>`);
 }
 function captureToolPhoto(id){
-  const draft={name:val('f-name'),code:val('f-code'),category:val('f-cat'),home:val('f-home'),notes:val('f-notes'),img:_toolImg};
+  const draft={name:val('f-name'),code:val('f-code'),category:val('f-cat'),home:val('f-home'),contents:_toolContents.slice(),img:_toolImg};
   openCamera('Point the camera at the tool and take a clear photo.', data=>{ if(data) draft.img=data; editTool(id||null, draft); });
+}
+function addContentEdit(id){
+  const v=(val('f-content-add')||'').trim(); if(!v) return;
+  _toolContents.push(v);
+  editTool(id||null, {name:val('f-name'),code:val('f-code'),category:val('f-cat'),home:val('f-home'),contents:_toolContents.slice(),img:_toolImg});
+  setTimeout(()=>{ const el=document.getElementById('f-content-add'); if(el) el.focus(); },30);
+}
+async function addContentDetail(toolId){
+  const v=prompt('Add an item to the box contents (can’t be removed once added):'); if(!v||!v.trim()) return;
+  const t=tool(toolId); const contents=(t.contents||[]).concat([v.trim()]);
+  const local=db.tools.find(x=>x.id===toolId); if(local) local.contents=contents;
+  try{ await col('tools').doc(toolId).update({contents}); nudge(); toast('✅ Added'); }catch(e){ toast('⚠️ Not synced — tap ⟳'); }
+  toolDetail(toolId);
 }
 async function saveTool(id){
   const name=val('f-name').trim(); if(!name){ toast('⚠️ Enter a tool name'); return; }
   if(!auth.currentUser){ toast('⚠️ Still connecting — give it a sec and try again'); return; }
   let img=_toolImg||null;
   if(img && img.length>800000){ img=null; toast('⚠️ Photo too big — saving the tool without it'); }
-  const data={name,code:val('f-code').trim()||nextCode(),category:val('f-cat').trim(),home:val('f-home').trim(),notes:(val('f-notes')||'').trim()||null,img};
+  const data={name,code:val('f-code').trim()||nextCode(),category:val('f-cat').trim(),home:val('f-home').trim(),contents:_toolContents.slice(),img};
   closeModal(); toast('Saving…');
   try{
     if(id){ await col('tools').doc(id).update(data); }

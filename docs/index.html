@@ -284,6 +284,19 @@ nav button{position:relative}
       <button class="btn ghost" onclick="emailOrder()">✉️ Email to Mitch</button>
     </div>
   </section>
+
+  <!-- CREW (admin only) -->
+  <section id="view-crew" class="view">
+    <div class="view-title"><div class="bar"></div><h2>Crew</h2></div>
+    <p class="sub">Add or remove your team as it grows. They appear when signing tools out and making requests.</p>
+    <div class="card">
+      <div style="display:flex; gap:8px; margin-bottom:14px">
+        <input id="crew-name-tab" placeholder="New crew member name" onkeydown="if(event.key==='Enter')addCrewTab()">
+        <button class="btn" onclick="addCrewTab()">+ Add</button>
+      </div>
+      <div id="crew-list"></div>
+    </div>
+  </section>
 </main>
 
 <!-- Bottom nav -->
@@ -293,6 +306,7 @@ nav button{position:relative}
   <button data-view="scan" onclick="show('scan')"><span class="ic">📷</span>Sign out</button>
   <button data-view="stock" onclick="show('stock')"><span class="ic">🚐</span>Stock</button>
   <button data-view="orders" onclick="show('orders')"><span class="ic">📋</span>Orders</button>
+  <button data-view="crew" id="nav-crew" class="hidden" onclick="show('crew')"><span class="ic">👥</span>Crew</button>
 </nav>
 
 <div id="toast"></div>
@@ -368,6 +382,7 @@ function startApp(){
   document.body.classList.toggle('is-admin', isAdmin());
   const pill=document.getElementById('role-pill');
   if(pill){ pill.textContent=isAdmin()?'ADMIN':'STAFF'; pill.className='role-pill '+(isAdmin()?'admin':'staff'); }
+  const navCrew=document.getElementById('nav-crew'); if(navCrew) navCrew.classList.toggle('hidden', !isAdmin());
   subscribeAll();
   seedIfEmpty();
   renderAll();
@@ -512,7 +527,7 @@ function show(v){
 }
 
 /* ============ Renderers ============ */
-function renderAll(){ renderDashboard(); renderTools(); renderScanList(); renderLabels(); renderVans(); renderOrders(); }
+function renderAll(){ renderDashboard(); renderTools(); renderScanList(); renderLabels(); renderVans(); renderOrders(); renderCrew(); }
 
 function lowItems(){
   const out=[];
@@ -1022,7 +1037,23 @@ function addCrew(){
 }
 function delCrew(id){
   if(!confirm('Remove this crew member?')) return;
-  db.people=db.people.filter(p=>p.id!==id); col('people').doc(id).delete(); openCrew();
+  db.people=db.people.filter(p=>p.id!==id); col('people').doc(id).delete(); nudge();
+  renderCrew();
+  if(document.querySelector('#modal-root .sheet')) openCrew();
+}
+function renderCrew(){
+  const el=document.getElementById('crew-list'); if(!el) return;
+  el.innerHTML = db.people.length ? db.people.map(p=>`
+    <div class="row"><div class="avatar">${initials(p.name)}</div>
+      <div class="grow"><div class="name">${esc(p.name)}</div></div>
+      ${isAdmin()?`<button class="btn sm danger" onclick="delCrew('${p.id}')">Remove</button>`:''}</div>`).join('')
+    : `<div class="empty">No crew yet. Add your first team member above.</div>`;
+}
+function addCrewTab(){
+  const n=val('crew-name-tab').trim(); if(!n) return;
+  const id=uid('p'); db.people.push({id,name:n}); col('people').doc(id).set({name:n}); nudge();
+  const inp=document.getElementById('crew-name-tab'); if(inp) inp.value='';
+  renderCrew(); toast('✅ '+esc(n)+' added');
 }
 function exportData(){
   const blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'});

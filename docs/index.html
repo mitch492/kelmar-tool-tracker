@@ -1,0 +1,912 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>KelMar Tool Tracker</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231A1A1A'/><text x='50' y='68' font-size='60' text-anchor='middle' fill='%23F5A800' font-family='Arial'>K</text></svg>">
+<!-- QR generation + scanning libraries -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<!-- Firebase (shared cloud data + login) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<style>
+:root{
+  --gold:#F5A800; --charcoal:#555555; --ink:#1A1A1A; --white:#FFFFFF;
+  --grey:#F5F5F5; --line:#e6e6e6; --good:#2e7d32; --warn:#c62828;
+  --shadow:0 2px 10px rgba(0,0,0,.08);
+  --nav-h:64px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  font-family:'Montserrat','Helvetica Neue',Arial,sans-serif;
+  color:var(--ink); background:var(--grey);
+  -webkit-font-smoothing:antialiased; padding-bottom:calc(var(--nav-h) + env(safe-area-inset-bottom));
+}
+h1,h2,h3{margin:0}
+button{font-family:inherit; cursor:pointer}
+.hidden{display:none !important}
+
+/* Header */
+header{
+  background:var(--ink); color:var(--white);
+  padding:14px 16px calc(14px); display:flex; align-items:center; gap:12px;
+  position:sticky; top:0; z-index:20; border-bottom:3px solid var(--gold);
+}
+.brand{font-size:20px; letter-spacing:.5px; line-height:1}
+.brand b{font-weight:800}
+.brand span{font-weight:300}
+.brand small{display:block; font-size:11px; color:var(--gold); font-weight:600; letter-spacing:2px; margin-top:3px; text-transform:uppercase}
+header .spacer{flex:1}
+.hbtn{background:transparent; border:1px solid #444; color:#ddd; border-radius:8px; padding:8px 10px; font-size:12px}
+.hbtn:hover{border-color:var(--gold); color:var(--gold)}
+
+/* Layout */
+main{max-width:900px; margin:0 auto; padding:16px}
+.view{display:none; animation:fade .2s ease}
+.view.active{display:block}
+@keyframes fade{from{opacity:0; transform:translateY(4px)}to{opacity:1}}
+.view-title{display:flex; align-items:center; gap:10px; margin:4px 0 16px}
+.view-title h2{font-size:22px; font-weight:800}
+.view-title .bar{width:34px; height:4px; background:var(--gold); border-radius:2px}
+.sub{color:var(--charcoal); font-size:13px; margin:-8px 0 16px}
+
+/* Cards */
+.card{background:var(--white); border-radius:14px; box-shadow:var(--shadow); padding:16px; margin-bottom:14px}
+.card h3{font-size:15px; font-weight:700; margin-bottom:10px}
+
+/* Stat tiles */
+.stats{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin-bottom:16px}
+.stat{background:var(--white); border-radius:14px; box-shadow:var(--shadow); padding:16px; position:relative; overflow:hidden}
+.stat::before{content:''; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--gold)}
+.stat .n{font-size:30px; font-weight:800; line-height:1}
+.stat .l{font-size:12px; color:var(--charcoal); margin-top:6px; text-transform:uppercase; letter-spacing:.5px}
+.stat.warn::before{background:var(--warn)}
+.stat.warn .n{color:var(--warn)}
+
+/* Lists */
+.row{display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:none}
+.row .grow{flex:1; min-width:0}
+.row .name{font-weight:600; font-size:15px}
+.row .meta{font-size:12px; color:var(--charcoal); margin-top:2px}
+.pill{font-size:11px; font-weight:700; padding:4px 10px; border-radius:999px; white-space:nowrap}
+.pill.in{background:#e8f5e9; color:var(--good)}
+.pill.out{background:#fdecea; color:var(--warn)}
+.pill.low{background:#fdecea; color:var(--warn)}
+.pill.ok{background:#e8f5e9; color:var(--good)}
+.avatar{width:38px; height:38px; border-radius:50%; background:var(--gold); color:var(--ink); font-weight:800; display:flex; align-items:center; justify-content:center; font-size:14px; flex-shrink:0}
+.tool-ico{width:38px;height:38px;border-radius:10px;background:var(--grey);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+
+/* Buttons */
+.btn{background:var(--gold); color:var(--ink); border:none; border-radius:10px; padding:12px 16px; font-weight:700; font-size:14px}
+.btn:hover{filter:brightness(.95)}
+.btn.block{width:100%; display:block}
+.btn.ghost{background:var(--white); border:1.5px solid var(--line); color:var(--ink)}
+.btn.dark{background:var(--ink); color:var(--white)}
+.btn.sm{padding:8px 12px; font-size:13px; border-radius:8px}
+.btn.danger{background:#fdecea; color:var(--warn)}
+.btn-row{display:flex; gap:10px; flex-wrap:wrap}
+
+/* Inputs */
+label.field{display:block; margin-bottom:12px}
+label.field .lab{font-size:12px; font-weight:600; color:var(--charcoal); margin-bottom:5px; display:block}
+input,select,textarea{width:100%; padding:11px 12px; border:1.5px solid var(--line); border-radius:10px; font-size:15px; font-family:inherit; background:var(--white); color:var(--ink)}
+input:focus,select:focus,textarea:focus{outline:none; border-color:var(--gold)}
+
+/* Bottom nav */
+nav{
+  position:fixed; bottom:0; left:0; right:0; height:calc(var(--nav-h) + env(safe-area-inset-bottom));
+  padding-bottom:env(safe-area-inset-bottom);
+  background:var(--white); border-top:1px solid var(--line);
+  display:flex; z-index:30; box-shadow:0 -2px 12px rgba(0,0,0,.05);
+}
+nav button{flex:1; background:none; border:none; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; color:var(--charcoal); font-size:10px; font-weight:600; padding:0}
+nav button .ic{font-size:20px; line-height:1}
+nav button.active{color:var(--ink)}
+nav button.active .ic{filter:none}
+nav button.active::after{content:''; position:absolute; top:0; width:32px; height:3px; background:var(--gold); border-radius:0 0 3px 3px}
+nav button{position:relative}
+
+/* Scan button (big) */
+.scan-cta{position:fixed; bottom:calc(var(--nav-h) + 16px + env(safe-area-inset-bottom)); right:16px; z-index:25;
+  background:var(--gold); color:var(--ink); border:none; border-radius:50%; width:60px; height:60px; font-size:26px;
+  box-shadow:0 6px 18px rgba(245,168,0,.5)}
+
+/* Modal */
+.modal{position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:50; display:flex; align-items:flex-end; justify-content:center; padding:0}
+.modal.center{align-items:center; padding:16px}
+.sheet{background:var(--white); width:100%; max-width:520px; border-radius:20px 20px 0 0; padding:20px; max-height:92vh; overflow:auto; animation:slideup .25s ease}
+.modal.center .sheet{border-radius:18px}
+@keyframes slideup{from{transform:translateY(30px); opacity:.6}to{transform:translateY(0); opacity:1}}
+.sheet .handle{width:44px; height:5px; background:var(--line); border-radius:3px; margin:0 auto 14px}
+.sheet h3{font-size:18px; font-weight:800; margin-bottom:4px}
+.sheet .close{position:absolute}
+.modal-x{float:right; background:none; border:none; font-size:22px; color:var(--charcoal); margin-top:-4px}
+
+/* Empty state */
+.empty{text-align:center; color:var(--charcoal); padding:30px 10px; font-size:14px}
+.empty .big{font-size:40px; margin-bottom:8px}
+
+/* Section head with action */
+.sec-head{display:flex; align-items:center; justify-content:space-between; margin-bottom:12px}
+.sec-head h3{font-size:16px; font-weight:800}
+.tag{font-size:11px; color:var(--charcoal); font-weight:600}
+
+/* Labels / print sheet */
+.labels-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:10px}
+.label{border:1px dashed #ccc; border-radius:10px; padding:10px; text-align:center; background:#fff; break-inside:avoid}
+.label .qr{display:flex; justify-content:center; margin-bottom:6px}
+.label .qr img,.label .qr canvas{width:110px !important; height:110px !important}
+.label .lc{font-size:12px; font-weight:800; letter-spacing:.5px}
+.label .ln{font-size:11px; color:var(--charcoal); margin-top:2px; height:26px; overflow:hidden}
+.label .brandtag{font-size:8px; color:var(--gold); font-weight:800; letter-spacing:1px; margin-top:4px; text-transform:uppercase}
+
+/* Stepper for stock qty */
+.stepper{display:flex; align-items:center; gap:8px}
+.stepper button{width:34px; height:34px; border-radius:8px; border:1.5px solid var(--line); background:#fff; font-size:18px; font-weight:800; color:var(--ink)}
+.stepper .q{min-width:34px; text-align:center; font-weight:800; font-size:16px}
+
+/* Toast */
+#toast{position:fixed; bottom:calc(var(--nav-h) + 24px); left:50%; transform:translateX(-50%); background:var(--ink); color:#fff; padding:12px 18px; border-radius:12px; font-size:14px; font-weight:600; z-index:100; opacity:0; transition:opacity .25s, transform .25s; pointer-events:none; box-shadow:var(--shadow)}
+#toast.show{opacity:1; transform:translateX(-50%) translateY(-4px)}
+#toast .k{color:var(--gold)}
+
+#reader{width:100%; border-radius:12px; overflow:hidden}
+
+@media (max-width:520px){ .labels-grid{grid-template-columns:repeat(2,1fr)} }
+
+/* Print */
+@media print{
+  header,nav,.scan-cta,#toast,.no-print{display:none !important}
+  body{background:#fff; padding:0}
+  main{max-width:none; padding:0}
+  .view:not(#view-labels){display:none !important}
+  #view-labels{display:block !important}
+  .labels-grid{grid-template-columns:repeat(3,1fr); gap:6px}
+  .card{box-shadow:none; padding:0}
+  .label{border:1px solid #ddd}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><b>KelMar</b> <span>Projects</span><small>Tool Tracker</small></div>
+  <div class="spacer"></div>
+  <button class="hbtn" onclick="openBackup()">⋯ Data</button>
+</header>
+
+<main>
+  <!-- DASHBOARD -->
+  <section id="view-dashboard" class="view active">
+    <div class="view-title"><div class="bar"></div><h2>Dashboard</h2></div>
+    <div class="stats" id="dash-stats"></div>
+
+    <div class="card">
+      <div class="sec-head"><h3>Currently out</h3><span class="tag" id="out-count"></span></div>
+      <div id="dash-out"></div>
+    </div>
+
+    <div class="card">
+      <div class="sec-head"><h3>Crew requests</h3><span class="tag" id="dash-req-tag"></span></div>
+      <div id="dash-req"></div>
+    </div>
+
+    <div class="card">
+      <div class="sec-head"><h3>Needs ordering</h3><span class="tag">low stock across vans</span></div>
+      <div id="dash-order"></div>
+    </div>
+
+    <div class="card">
+      <div class="sec-head"><h3>Recent activity</h3></div>
+      <div id="dash-log"></div>
+    </div>
+  </section>
+
+  <!-- TOOLS -->
+  <section id="view-tools" class="view">
+    <div class="view-title"><div class="bar"></div><h2>Tools</h2></div>
+    <div class="btn-row" style="margin-bottom:14px">
+      <button class="btn" onclick="editTool()">+ Add tool</button>
+      <button class="btn ghost" onclick="show('labels')">🏷️ Print labels</button>
+    </div>
+    <input id="tool-search" placeholder="Search tools…" oninput="renderTools()" style="margin-bottom:14px">
+    <div class="card"><div id="tools-list"></div></div>
+  </section>
+
+  <!-- SCAN / SIGN OUT -->
+  <section id="view-scan" class="view">
+    <div class="view-title"><div class="bar"></div><h2>Sign out / in</h2></div>
+    <p class="sub">Scan a tool's QR sticker, or tap a tool below to sign it out or return it.</p>
+    <div class="card no-print">
+      <button class="btn block dark" id="scan-toggle" onclick="toggleScanner()">📷 Scan a QR sticker</button>
+      <div id="reader" class="hidden" style="margin-top:12px"></div>
+    </div>
+    <div class="card">
+      <div class="sec-head"><h3>All tools</h3><span class="tag">tap to sign out / in</span></div>
+      <div id="scan-list"></div>
+    </div>
+  </section>
+
+  <!-- LABELS -->
+  <section id="view-labels" class="view">
+    <div class="view-title no-print"><div class="bar"></div><h2>QR Labels</h2></div>
+    <p class="sub no-print">Print onto sticker/label paper, cut out, and stick one on each tool. Tick the tools you want, then Print.</p>
+    <div class="btn-row no-print" style="margin-bottom:14px">
+      <button class="btn" onclick="window.print()">🖨️ Print labels</button>
+      <button class="btn ghost" onclick="toggleAllLabels()">Select all / none</button>
+    </div>
+    <div class="card"><div class="labels-grid" id="labels-grid"></div></div>
+  </section>
+
+  <!-- VAN STOCK -->
+  <section id="view-stock" class="view">
+    <div class="view-title"><div class="bar"></div><h2>Van Stock</h2></div>
+    <p class="sub">Set a minimum level per item. Anything at or below its minimum lands on the Order list automatically.</p>
+    <div class="btn-row" style="margin-bottom:14px">
+      <button class="btn" onclick="openRequest()">➕ Request supplies</button>
+      <button class="btn ghost" onclick="editVan()">+ Add van / vehicle</button>
+    </div>
+    <div id="vans-wrap"></div>
+  </section>
+
+  <!-- ORDERS -->
+  <section id="view-orders" class="view">
+    <div class="view-title"><div class="bar"></div><h2>Order List</h2></div>
+    <p class="sub">Everything the crew needs, by name, ready to send to your supplier. No more notes.</p>
+    <button class="btn block" style="margin-bottom:14px" onclick="openRequest()">➕ Add a crew request</button>
+    <div class="card">
+      <div class="sec-head"><h3>Crew requests</h3><span class="tag" id="req-total"></span></div>
+      <div id="requests-list"></div>
+    </div>
+    <div class="card">
+      <div class="sec-head"><h3>Vans running low</h3><span class="tag" id="order-total"></span></div>
+      <div id="orders-list"></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn" onclick="copyOrder()">📋 Copy full list</button>
+      <button class="btn ghost" onclick="emailOrder()">✉️ Email to Mitch</button>
+    </div>
+  </section>
+</main>
+
+<!-- Bottom nav -->
+<nav id="nav">
+  <button data-view="dashboard" class="active" onclick="show('dashboard')"><span class="ic">🏠</span>Home</button>
+  <button data-view="tools" onclick="show('tools')"><span class="ic">🔧</span>Tools</button>
+  <button data-view="scan" onclick="show('scan')"><span class="ic">📷</span>Sign out</button>
+  <button data-view="stock" onclick="show('stock')"><span class="ic">🚐</span>Stock</button>
+  <button data-view="orders" onclick="show('orders')"><span class="ic">📋</span>Orders</button>
+</nav>
+
+<div id="toast"></div>
+<div id="modal-root"></div>
+
+<script>
+/* ============ Data layer (Firebase cloud) ============ */
+const firebaseConfig = {
+  apiKey: "__API_KEY__",
+  authDomain: "__AUTH_DOMAIN__",
+  projectId: "__PROJECT_ID__",
+  storageBucket: "__STORAGE_BUCKET__",
+  messagingSenderId: "__SENDER_ID__",
+  appId: "__APP_ID__"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const fdb = firebase.firestore();
+fdb.enablePersistence({ synchronizeTabs:true }).catch(()=>{});   // works offline / patchy signal
+const COLS = ['people','tools','vans','requests','log'];
+
+let db = { people:[], tools:[], vans:[], requests:[], log:[] };
+let seedCounter=0;
+function uid(p){ return p+Math.random().toString(36).slice(2,8)+(seedCounter++); }
+function nowISO(){ return new Date().toISOString(); }
+function col(n){ return fdb.collection(n); }
+
+function boot(){
+  auth.signInAnonymously().catch(e=>{ console.warn(e); toast('⚠️ Can’t reach the cloud — check internet'); });
+  auth.onAuthStateChanged(user=>{ if(user){ subscribeAll(); seedIfEmpty(); } });
+}
+function subscribeAll(){
+  COLS.forEach(name=>{
+    let q = col(name);
+    if(name==='log') q = q.orderBy('at','asc');
+    q.onSnapshot(snap=>{
+      db[name] = snap.docs.map(d=>({ id:d.id, ...d.data() }));
+      renderAll();
+    }, err=>console.warn('sync '+name, err));
+  });
+}
+async function seedIfEmpty(){
+  try{
+    const snap = await col('people').limit(1).get();
+    if(!snap.empty) return;                      // already has data — don't re-seed
+    const s = seed(), batch = fdb.batch();
+    ['people','tools','vans','requests','log'].forEach(name=>{
+      (s[name]||[]).forEach(x=>{ const {id,...rest}=x; batch.set(col(name).doc(id), rest); });
+    });
+    await batch.commit();
+  }catch(e){ console.warn('seed', e); }
+}
+
+function seed(){
+  return {
+    people:[{id:'p1',name:'Mitch'},{id:'p2',name:'Dave'},{id:'p3',name:'Sam'},{id:'p4',name:'Dalton'}],
+    tools:[
+      {id:'t1',code:'KM-0001',name:'Makita Cordless Drill',category:'Power tools',home:'Garage',status:'out',holder:'p4',since:daysAgo(2)},
+      {id:'t2',code:'KM-0002',name:'Circular Saw',category:'Power tools',home:'Garage',status:'in',holder:null,since:null},
+      {id:'t3',code:'KM-0003',name:'Laser Level',category:'Levels & measuring',home:'Office',status:'out',holder:'p3',since:daysAgo(6)},
+      {id:'t4',code:'KM-0004',name:'Impact Driver',category:'Power tools',home:'Garage',status:'in',holder:null,since:null},
+      {id:'t5',code:'KM-0005',name:'Angle Grinder',category:'Power tools',home:'Garage',status:'in',holder:null,since:null},
+      {id:'t6',code:'KM-0006',name:'Nail Gun',category:'Power tools',home:'Garage',status:'out',holder:'p1',since:daysAgo(1)},
+      {id:'t7',code:'KM-0007',name:'Wet/Dry Vacuum',category:'Site gear',home:'Garage',status:'in',holder:null,since:null},
+      {id:'t8',code:'KM-0008',name:'Extension Ladder 3.6m',category:'Access',home:'Garage',status:'in',holder:null,since:null}
+    ],
+    vans:[
+      {id:'v1',name:"Dave's Ute",owner:'p2',items:[
+        {id:'s1',name:'75mm Bugle Screws (box)',unit:'box',qty:1,par:3},
+        {id:'s2',name:'Silicone – Clear',unit:'tube',qty:2,par:6},
+        {id:'s3',name:'Multi-tool Blades',unit:'pack',qty:0,par:2},
+        {id:'s4',name:'Grinder Cutting Discs',unit:'pack',qty:4,par:3},
+      ]},
+      {id:'v2',name:"Sam's Van",owner:'p3',items:[
+        {id:'s5',name:'50mm Bugle Screws (box)',unit:'box',qty:2,par:2},
+        {id:'s6',name:'Liquid Nails',unit:'tube',qty:1,par:4},
+        {id:'s7',name:'Impact Driver Bits',unit:'pack',qty:1,par:3},
+        {id:'s8',name:'Cable Ties (bag)',unit:'bag',qty:3,par:2},
+      ]},
+      {id:'v3',name:"Dalton's Ute",owner:'p4',items:[
+        {id:'s9',name:'75mm Bugle Screws (box)',unit:'box',qty:0,par:4},
+        {id:'s10',name:'Silicone – Clear',unit:'tube',qty:3,par:6},
+        {id:'s11',name:'Tape Measure 8m',unit:'each',qty:1,par:2},
+      ]}
+    ],
+    requests:[
+      {id:'r1',personId:'p4',item:'75mm Bugle Screws (box)',qty:10,unit:'box',at:daysAgo(0),status:'open'},
+      {id:'r2',personId:'p3',item:'Liquid Nails',qty:4,unit:'tube',at:daysAgo(1),status:'open'},
+    ],
+    log:[
+      {id:'l1',toolId:'t1',action:'out',personId:'p4',at:daysAgo(2)},
+      {id:'l2',toolId:'t3',action:'out',personId:'p3',at:daysAgo(6)},
+      {id:'l3',toolId:'t6',action:'out',personId:'p1',at:daysAgo(1)},
+    ]
+  };
+}
+function daysAgo(n){ const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString(); }
+
+/* ============ Helpers ============ */
+function person(id){ return db.people.find(p=>p.id===id); }
+function tool(id){ return db.tools.find(t=>t.id===id); }
+function initials(name){ return name.split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase(); }
+function nextCode(){
+  let max=0; db.tools.forEach(t=>{ const m=/(\d+)/.exec(t.code||''); if(m) max=Math.max(max,+m[1]); });
+  return 'KM-'+String(max+1).padStart(4,'0');
+}
+function timeAgo(iso){
+  if(!iso) return '';
+  const s=(Date.now()-new Date(iso))/1000;
+  const d=Math.floor(s/86400), h=Math.floor(s/3600), m=Math.floor(s/60);
+  if(d>0) return d+(d===1?' day':' days')+' ago';
+  if(h>0) return h+(h===1?' hr':' hrs')+' ago';
+  if(m>0) return m+' min ago';
+  return 'just now';
+}
+function toast(html){
+  const t=document.getElementById('toast'); t.innerHTML=html; t.classList.add('show');
+  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),2600);
+}
+
+/* ============ Navigation ============ */
+function show(v){
+  document.querySelectorAll('.view').forEach(el=>el.classList.remove('active'));
+  document.getElementById('view-'+v).classList.add('active');
+  document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active', b.dataset.view===v));
+  if(scanner && v!=='scan') stopScanner();
+  window.scrollTo(0,0);
+  renderAll();
+}
+
+/* ============ Renderers ============ */
+function renderAll(){ renderDashboard(); renderTools(); renderScanList(); renderLabels(); renderVans(); renderOrders(); }
+
+function lowItems(){
+  const out=[];
+  db.vans.forEach(v=>v.items.forEach(it=>{ if(it.qty<=it.par) out.push({van:v,item:it,need:Math.max(it.par-it.qty, it.par)}); }));
+  return out;
+}
+function openRequests(){ return (db.requests||[]).filter(r=>r.status==='open'); }
+function knownItems(){ const s=new Set(); db.vans.forEach(v=>v.items.forEach(i=>s.add(i.name))); return [...s]; }
+function reqRow(r){
+  const p=person(r.personId);
+  return `<div class="row"><div class="avatar">${p?initials(p.name):'?'}</div>
+    <div class="grow"><div class="name">${p?esc(p.name):'Someone'} needs ${r.qty} ${esc(r.unit)}</div>
+    <div class="meta">${esc(r.item)} · ${timeAgo(r.at)}</div></div>
+    <button class="btn sm" onclick="fulfillRequest('${r.id}')">Given</button></div>`;
+}
+
+function renderDashboard(){
+  const out=db.tools.filter(t=>t.status==='out');
+  const low=lowItems();
+  document.getElementById('dash-stats').innerHTML=`
+    <div class="stat"><div class="n">${db.tools.length}</div><div class="l">Tools tracked</div></div>
+    <div class="stat"><div class="n">${out.length}</div><div class="l">Signed out</div></div>
+    <div class="stat ${low.length?'warn':''}"><div class="n">${low.length}</div><div class="l">Low on stock</div></div>`;
+  document.getElementById('out-count').textContent=out.length+' out';
+
+  document.getElementById('dash-out').innerHTML = out.length ? out.map(t=>{
+    const p=person(t.holder);
+    const face=t.photo?`<img src="${t.photo}" onclick="viewPhotoEl(this)" style="width:44px;height:44px;border-radius:9px;object-fit:cover;cursor:zoom-in;flex-shrink:0">`:`<div class="avatar">${p?initials(p.name):'?'}</div>`;
+    return `<div class="row">${face}
+      <div class="grow"><div class="name">${esc(t.name)}</div>
+      <div class="meta">${p?esc(p.name):'Unknown'} · ${timeAgo(t.since)}${overdue(t)?' · <b style="color:var(--warn)">overdue</b>':''}</div></div>
+      <button class="btn sm ghost" onclick="openSign('${t.id}')">Return</button></div>`;
+  }).join('') : `<div class="empty">✅ Every tool is in the garage.</div>`;
+
+  const reqs=openRequests();
+  document.getElementById('dash-req-tag').textContent=reqs.length?reqs.length+' waiting':'';
+  document.getElementById('dash-req').innerHTML = reqs.length ? reqs.slice(0,5).map(reqRow).join('')
+    : `<div class="empty">✅ No requests from the crew.</div>`;
+
+  document.getElementById('dash-order').innerHTML = low.length ? low.slice(0,5).map(({van,item})=>`
+    <div class="row"><div class="tool-ico">📦</div><div class="grow"><div class="name">${esc(item.name)}</div>
+    <div class="meta">${esc(van.name)} · ${item.qty} left (min ${item.par})</div></div>
+    <span class="pill low">LOW</span></div>`).join('') + (low.length>5?`<div class="meta" style="padding-top:10px">+${low.length-5} more — see Order list</div>`:'')
+    : `<div class="empty">✅ All vans stocked up.</div>`;
+
+  const recent=[...db.log].reverse().slice(0,6);
+  document.getElementById('dash-log').innerHTML = recent.length ? recent.map(l=>{
+    const t=tool(l.toolId), p=person(l.personId);
+    const ico=l.photo?`<img src="${l.photo}" onclick="viewPhotoEl(this)" style="width:38px;height:38px;border-radius:8px;object-fit:cover;cursor:zoom-in;flex-shrink:0">`:`<div class="tool-ico">${l.action==='out'?'📤':'📥'}</div>`;
+    return `<div class="row">${ico}
+      <div class="grow"><div class="name">${t?esc(t.name):'Tool'}</div>
+      <div class="meta">${l.action==='out'?'Signed out by':'Returned by'} ${p?esc(p.name):'—'} · ${timeAgo(l.at)}${l.photo?' · 📸':''}</div></div></div>`;
+  }).join('') : `<div class="empty">No activity yet.</div>`;
+}
+function overdue(t){ if(t.status!=='out'||!t.since) return false; return (Date.now()-new Date(t.since))/86400000 > 5; }
+
+function renderTools(){
+  const q=(document.getElementById('tool-search')?.value||'').toLowerCase();
+  const list=db.tools.filter(t=>!q || (t.name+t.code+t.category).toLowerCase().includes(q));
+  const el=document.getElementById('tools-list');
+  el.innerHTML = list.length ? list.map(t=>{
+    const p=person(t.holder);
+    return `<div class="row" onclick="toolDetail('${t.id}')" style="cursor:pointer"><div class="tool-ico">🔧</div>
+      <div class="grow"><div class="name">${esc(t.name)}</div>
+      <div class="meta">${t.code} · ${esc(t.category||'')}${t.status==='out'&&p?' · with '+esc(p.name):''}</div></div>
+      <span class="pill ${t.status}">${t.status==='out'?'OUT':'IN'}</span>
+      <span style="color:var(--charcoal);font-size:18px;margin-left:4px">›</span></div>`;
+  }).join('') : `<div class="empty"><div class="big">🔧</div>No tools yet. Add your first tool to get a QR code.</div>`;
+}
+
+function renderScanList(){
+  const el=document.getElementById('scan-list');
+  el.innerHTML = db.tools.map(t=>{
+    const p=person(t.holder);
+    return `<div class="row" onclick="openSign('${t.id}')" style="cursor:pointer">
+      <div class="tool-ico">🔧</div>
+      <div class="grow"><div class="name">${esc(t.name)}</div>
+      <div class="meta">${t.code}${t.status==='out'&&p?' · with '+esc(p.name):''}</div></div>
+      <span class="pill ${t.status}">${t.status==='out'?'OUT':'IN'}</span></div>`;
+  }).join('');
+}
+
+function renderVans(){
+  const wrap=document.getElementById('vans-wrap');
+  wrap.innerHTML = db.vans.map(v=>`
+    <div class="card">
+      <div class="sec-head">
+        <h3>🚐 ${esc(v.name)}${v.owner?` <span class="tag" style="font-weight:600">· ${esc(person(v.owner)?.name||'')}</span>`:''}</h3>
+        <button class="btn sm ghost" onclick="editVan('${v.id}')">Edit</button>
+      </div>
+      <div>${v.items.map(it=>{
+        const low=it.qty<=it.par;
+        return `<div class="row">
+          <div class="grow"><div class="name">${esc(it.name)}</div>
+          <div class="meta">min ${it.par} ${it.unit} ${low?'· <b style="color:var(--warn)">reorder</b>':''}</div></div>
+          <div class="stepper">
+            <button onclick="stock('${v.id}','${it.id}',-1)">−</button>
+            <span class="q" style="${low?'color:var(--warn)':''}">${it.qty}</span>
+            <button onclick="stock('${v.id}','${it.id}',1)">+</button>
+          </div></div>`;
+      }).join('')}</div>
+      <button class="btn sm ghost" style="margin-top:12px" onclick="editItem('${v.id}')">+ Add item</button>
+    </div>`).join('') || `<div class="empty"><div class="big">🚐</div>No vans yet.</div>`;
+}
+
+function renderOrders(){
+  const low=lowItems();
+  document.getElementById('order-total').textContent=low.length+' item'+(low.length!==1?'s':'');
+  document.getElementById('orders-list').innerHTML = low.length ? low.map(({van,item,need})=>`
+    <div class="row"><div class="tool-ico">📦</div>
+      <div class="grow"><div class="name">${esc(item.name)}</div>
+      <div class="meta">${esc(van.name)}${van.owner?' ('+esc(person(van.owner)?.name||'')+')':''} · ${item.qty} left → order ${need} ${item.unit}</div></div>
+      <span class="pill low">×${need}</span></div>`).join('')
+    : `<div class="empty">✅ All vans stocked.</div>`;
+  const reqs=openRequests();
+  document.getElementById('req-total').textContent=reqs.length+' request'+(reqs.length!==1?'s':'');
+  document.getElementById('requests-list').innerHTML = reqs.length ? reqs.map(reqRow).join('')
+    : `<div class="empty">No open requests from the crew.</div>`;
+}
+
+/* ============ Labels ============ */
+let labelSel={};
+function renderLabels(){
+  const grid=document.getElementById('labels-grid');
+  if(!grid) return;
+  db.tools.forEach(t=>{ if(!(t.id in labelSel)) labelSel[t.id]=true; });
+  grid.innerHTML=db.tools.map(t=>`
+    <div class="label" data-tid="${t.id}">
+      <label class="no-print" style="display:block; margin-bottom:6px; font-size:11px; color:var(--charcoal)">
+        <input type="checkbox" style="width:auto" ${labelSel[t.id]?'checked':''} onchange="labelSel['${t.id}']=this.checked; syncLabelPrint()"> include
+      </label>
+      <div class="qr" id="qr-${t.id}"></div>
+      <div class="lc">${t.code}</div>
+      <div class="ln">${esc(t.name)}</div>
+      <div class="brandtag">KelMar Projects</div>
+    </div>`).join('');
+  // draw QR codes
+  db.tools.forEach(t=>{
+    const box=document.getElementById('qr-'+t.id); if(!box) return;
+    box.innerHTML='';
+    if(window.QRCode){
+      try{ new QRCode(box,{text:qrPayload(t),width:110,height:110,correctLevel:QRCode.CorrectLevel.M}); }
+      catch(e){ box.innerHTML='<div style="font-size:10px;color:#999">QR offline</div>'; }
+    } else { box.innerHTML='<div style="font-size:10px;color:#999">QR lib offline</div>'; }
+  });
+  syncLabelPrint();
+}
+function qrPayload(t){ return 'KELMAR-TOOL:'+t.code; } // later: a real URL for phone-camera deep-links
+function syncLabelPrint(){
+  document.querySelectorAll('.label').forEach(l=>{
+    l.style.display = labelSel[l.dataset.tid]===false ? 'none' : '';
+  });
+}
+function toggleAllLabels(){
+  const anyOn=Object.values(labelSel).some(v=>v);
+  db.tools.forEach(t=>labelSel[t.id]=!anyOn);
+  renderLabels();
+}
+
+/* ============ Sign out / in ============ */
+function openSign(toolId){
+  const t=tool(toolId); if(!t) return;
+  let body;
+  if(t.status==='in'){
+    body=`<h3>Sign out: ${esc(t.name)}</h3><p class="sub" style="margin:2px 0 14px">${t.code} · who's taking it?</p>
+      <div id="people-pick">${db.people.map(p=>`
+        <button class="btn ghost block" style="text-align:left; margin-bottom:8px; display:flex; align-items:center; gap:10px"
+          onclick="startSignOut('${t.id}','${p.id}')">
+          <span class="avatar">${initials(p.name)}</span> ${esc(p.name)}</button>`).join('')}
+      </div>
+      <button class="btn sm ghost block" onclick="addPersonThenSignOut('${t.id}')">+ Add a person</button>`;
+  } else {
+    const p=person(t.holder);
+    const ph=t.photo?`<img src="${t.photo}" onclick="viewPhotoEl(this)" style="width:100%;border-radius:12px;margin:6px 0 12px;cursor:zoom-in">`:'';
+    body=`<h3>Return: ${esc(t.name)}</h3>
+      <p class="sub" style="margin:2px 0 10px">${t.code} · currently with <b>${p?esc(p.name):'someone'}</b> (${timeAgo(t.since)})</p>
+      ${ph}
+      <button class="btn block" onclick="doSignIn('${t.id}')">📥 Check it back in</button>`;
+  }
+  modal(body);
+}
+
+/* --- photo capture step --- */
+let pendingSignOut=null, captureStream=null, capturedPhoto=null;
+function startSignOut(toolId,personId){
+  pendingSignOut={toolId,personId}; capturedPhoto=null;
+  const t=tool(toolId), p=person(personId);
+  modal(`<h3>Photo for the record</h3>
+    <p class="sub" style="margin:2px 0 12px"><b>${esc(p.name)}</b> taking <b>${esc(t.name)}</b>. Snap a quick photo — it's stamped with the date & time.</p>
+    <video id="cap-video" autoplay playsinline muted style="width:100%;border-radius:14px;background:#111;aspect-ratio:4/3;object-fit:cover"></video>
+    <canvas id="cap-canvas" class="hidden"></canvas>
+    <div id="cap-preview"></div>
+    <div class="btn-row" id="cap-buttons" style="margin-top:12px">
+      <button class="btn" onclick="takePhoto()">📸 Take photo</button>
+      <button class="btn ghost" onclick="finishSignOut(null)">Skip</button>
+      <button class="btn ghost" onclick="cancelCapture()">Cancel</button>
+    </div>`);
+  navigator.mediaDevices?.getUserMedia({video:{facingMode:'user'},audio:false})
+    .then(s=>{ captureStream=s; const v=document.getElementById('cap-video'); if(v) v.srcObject=s; else s.getTracks().forEach(t=>t.stop()); })
+    .catch(()=>{ const b=document.getElementById('cap-preview'); if(b) b.innerHTML='<p class="sub" style="color:var(--charcoal)">📷 No camera here — tap <b>Skip</b> to sign out. On the phone version this snaps a photo automatically.</p>'; });
+}
+function takePhoto(){
+  const v=document.getElementById('cap-video'), c=document.getElementById('cap-canvas');
+  if(!v||!v.videoWidth){ toast('⚠️ Camera not ready'); return; }
+  const w=640, h=Math.round(w*(v.videoHeight/v.videoWidth));
+  c.width=w; c.height=h;
+  const ctx=c.getContext('2d');
+  ctx.drawImage(v,0,0,w,h);
+  const t=tool(pendingSignOut.toolId), p=person(pendingSignOut.personId);
+  const stamp=new Date().toLocaleString('en-AU',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  ctx.fillStyle='rgba(26,26,26,0.74)'; ctx.fillRect(0,h-54,w,54);
+  ctx.textBaseline='top'; ctx.textAlign='left';
+  ctx.fillStyle='#F5A800'; ctx.font='bold 15px Arial'; ctx.fillText('KelMar Projects', 12, h-47);
+  ctx.fillStyle='#fff'; ctx.font='13px Arial'; ctx.fillText(`${p.name} · ${t.name}`, 12, h-28);
+  ctx.textAlign='right'; ctx.fillStyle='#e0e0e0'; ctx.font='12px Arial'; ctx.fillText(stamp, w-12, h-28);
+  capturedPhoto=c.toDataURL('image/jpeg',0.6);
+  stopCaptureCamera();
+  document.getElementById('cap-video').classList.add('hidden');
+  document.getElementById('cap-preview').innerHTML=`<img src="${capturedPhoto}" style="width:100%;border-radius:14px">`;
+  document.getElementById('cap-buttons').innerHTML=
+    `<button class="btn" onclick="finishSignOut(capturedPhoto)">✅ Use photo & sign out</button>
+     <button class="btn ghost" onclick="startSignOut(pendingSignOut.toolId,pendingSignOut.personId)">↺ Retake</button>`;
+}
+function finishSignOut(photo){
+  stopCaptureCamera();
+  const ps=pendingSignOut; if(!ps) return;
+  pendingSignOut=null; capturedPhoto=null;
+  doSignOut(ps.toolId,ps.personId,photo);
+}
+function cancelCapture(){ stopCaptureCamera(); pendingSignOut=null; capturedPhoto=null; closeModal(); }
+function stopCaptureCamera(){ if(captureStream){ captureStream.getTracks().forEach(t=>t.stop()); captureStream=null; } }
+
+function doSignOut(toolId,personId,photo){
+  const t=tool(toolId); const now=nowISO();
+  col('tools').doc(toolId).update({status:'out',holder:personId,since:now,photo:photo||null});
+  col('log').add({toolId,action:'out',personId,at:now,photo:photo||null});
+  closeModal();
+  toast(`📤 <span class="k">${esc(t.name)}</span> signed out to ${esc(person(personId).name)}`);
+}
+function doSignIn(toolId){
+  const t=tool(toolId); const prev=t.holder;
+  col('tools').doc(toolId).update({status:'in',holder:null,since:null,photo:null});
+  col('log').add({toolId,action:'in',personId:prev,at:nowISO()});
+  closeModal();
+  toast(`📥 <span class="k">${esc(t.name)}</span> returned. Thanks!`);
+}
+function addPersonThenSignOut(toolId){
+  const name=prompt('New person / crew member name:');
+  if(!name) return;
+  const id=uid('p'); db.people.push({id,name:name.trim()});   // optimistic; syncs to cloud
+  col('people').doc(id).set({name:name.trim()});
+  startSignOut(toolId,id);
+}
+function viewPhotoEl(el){ viewPhoto(el.src); }
+function viewPhoto(src){
+  document.getElementById('modal-root').innerHTML=
+    `<div class="modal center" onclick="closeModal()"><div class="sheet" style="max-width:520px;border-radius:16px" onclick="event.stopPropagation()">
+      <img src="${src}" style="width:100%;border-radius:12px">
+      <button class="btn ghost block" style="margin-top:12px" onclick="closeModal()">Close</button></div></div>`;
+}
+
+/* --- tool history: "was it Dalton?" --- */
+function toolDetail(toolId){
+  const t=tool(toolId); if(!t) return;
+  const p=person(t.holder);
+  const cur = t.status==='out'
+    ? `<div class="card" style="box-shadow:none;background:var(--grey);margin-bottom:12px">
+         <div class="row" style="border:none;padding:0">
+           ${t.photo?`<img src="${t.photo}" onclick="viewPhotoEl(this)" style="width:56px;height:56px;border-radius:10px;object-fit:cover;cursor:zoom-in;flex-shrink:0">`:`<div class="avatar">${p?initials(p.name):'?'}</div>`}
+           <div class="grow"><div class="name">Out with ${p?esc(p.name):'someone'}</div>
+           <div class="meta">Taken ${timeAgo(t.since)}${overdue(t)?' · <b style="color:var(--warn)">overdue</b>':''}</div></div>
+         </div></div>`
+    : `<p class="sub" style="margin:2px 0 12px">✅ In the ${esc(t.home||'shed')} right now.</p>`;
+  const hist=db.log.filter(l=>l.toolId===toolId).slice(-8).reverse();
+  const history = hist.length ? `<h3 style="font-size:14px;font-weight:800;margin:16px 0 4px">History</h3>`+hist.map(l=>{
+      const pp=person(l.personId);
+      return `<div class="row">${l.photo?`<img src="${l.photo}" onclick="viewPhotoEl(this)" style="width:36px;height:36px;border-radius:8px;object-fit:cover;cursor:zoom-in;flex-shrink:0">`:`<div class="tool-ico">${l.action==='out'?'📤':'📥'}</div>`}
+        <div class="grow"><div class="name" style="font-size:14px">${l.action==='out'?'Taken by':'Returned by'} ${pp?esc(pp.name):'—'}</div>
+        <div class="meta">${new Date(l.at).toLocaleString('en-AU',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</div></div></div>`;
+    }).join('') : '';
+  modal(`<h3>${esc(t.name)}</h3><p class="sub" style="margin:2px 0 12px">${t.code} · ${esc(t.category||'')}</p>
+    ${cur}
+    <button class="btn block" onclick="openSign('${t.id}')">${t.status==='out'?'📥 Return this tool':'📤 Sign it out'}</button>
+    ${history}
+    <button class="btn ghost block" style="margin-top:12px" onclick="editTool('${t.id}')">Edit tool details</button>`);
+}
+
+/* --- crew supply requests: "give Dalton 10 boxes" --- */
+function openRequest(personId){
+  modal(`<h3>Request supplies</h3>
+    <p class="sub" style="margin:2px 0 12px">Flag what you're short on — it goes to Mitch's order list under your name.</p>
+    <label class="field"><span class="lab">Who's asking?</span>
+      <select id="r-person">${db.people.filter(p=>p.id!=='p1').map(p=>`<option value="${p.id}" ${p.id===personId?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>
+    <label class="field"><span class="lab">What do you need?</span>
+      <input id="r-item" list="known-items" placeholder="e.g. 75mm Bugle Screws (box)">
+      <datalist id="known-items">${knownItems().map(n=>`<option>${esc(n)}</option>`).join('')}</datalist></label>
+    <div style="display:flex;gap:10px">
+      <label class="field" style="flex:1"><span class="lab">How many?</span><input id="r-qty" type="number" min="1" value="1"></label>
+      <label class="field" style="flex:1.4"><span class="lab">Unit</span><input id="r-unit" value="box"></label>
+    </div>
+    <button class="btn block" onclick="submitRequest()">Send request to Mitch</button>
+    <button class="btn ghost block" style="margin-top:8px" onclick="closeModal()">Cancel</button>`);
+}
+function submitRequest(){
+  const personId=val('r-person'), item=val('r-item').trim(), qty=+val('r-qty')||1, unit=val('r-unit').trim()||'pcs';
+  if(!item){ toast('⚠️ Enter what you need'); return; }
+  col('requests').add({personId,item,qty,unit,at:nowISO(),status:'open'});
+  closeModal();
+  toast(`📨 <span class="k">${esc(person(personId).name)}</span>'s request sent to Mitch`);
+  show('orders');
+}
+function fulfillRequest(id){
+  col('requests').doc(id).update({status:'done',doneAt:nowISO()});
+  toast('✅ Marked as given');
+}
+
+/* ============ Edit tool ============ */
+function editTool(id){
+  const t=id?tool(id):{code:nextCode(),name:'',category:'',home:'Garage',status:'in',holder:null,since:null};
+  modal(`
+    <h3>${id?'Edit tool':'Add tool'}</h3>
+    <div style="margin-top:14px"></div>
+    <label class="field"><span class="lab">Tool name</span><input id="f-name" value="${esc(t.name)}" placeholder="e.g. Makita Cordless Drill"></label>
+    <label class="field"><span class="lab">Tool ID / code</span><input id="f-code" value="${esc(t.code)}"></label>
+    <label class="field"><span class="lab">Category</span><input id="f-cat" value="${esc(t.category||'')}" placeholder="e.g. Power tools" list="cats">
+      <datalist id="cats">${[...new Set(db.tools.map(x=>x.category).filter(Boolean))].map(c=>`<option>${esc(c)}</option>`).join('')}</datalist></label>
+    <label class="field"><span class="lab">Home location</span><input id="f-home" value="${esc(t.home||'Garage')}"></label>
+    <div class="btn-row" style="margin-top:8px">
+      <button class="btn" onclick="saveTool('${id||''}')">Save</button>
+      ${id?`<button class="btn danger" onclick="delTool('${id}')">Delete</button>`:''}
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+function saveTool(id){
+  const name=val('f-name').trim(); if(!name){ toast('⚠️ Enter a tool name'); return; }
+  const data={name,code:val('f-code').trim()||nextCode(),category:val('f-cat').trim(),home:val('f-home').trim()};
+  if(id){ col('tools').doc(id).update(data); }
+  else { col('tools').doc(uid('t')).set({status:'in',holder:null,since:null,photo:null,...data}); }
+  closeModal(); toast('✅ Saved');
+}
+function delTool(id){ if(!confirm('Delete this tool?')) return; col('tools').doc(id).delete(); closeModal(); }
+
+/* ============ Edit van / items ============ */
+function editVan(id){
+  const v=id?db.vans.find(x=>x.id===id):{name:''};
+  modal(`<h3>${id?'Edit van / vehicle':'Add van / vehicle'}</h3>
+    <label class="field" style="margin-top:14px"><span class="lab">Name</span><input id="f-vname" value="${esc(v.name)}" placeholder="e.g. Dave's Ute"></label>
+    <label class="field"><span class="lab">Belongs to</span>
+      <select id="f-vowner"><option value="">— nobody —</option>${db.people.filter(p=>p.id!=='p1').map(p=>`<option value="${p.id}" ${v.owner===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>
+    <div class="btn-row">
+      <button class="btn" onclick="saveVan('${id||''}')">Save</button>
+      ${id?`<button class="btn danger" onclick="delVan('${id}')">Delete</button>`:''}
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+function saveVan(id){
+  const name=val('f-vname').trim(); if(!name){ toast('⚠️ Enter a name'); return; }
+  const owner=val('f-vowner')||null;
+  if(id){ col('vans').doc(id).update({name,owner}); }
+  else { col('vans').doc(uid('v')).set({name,owner,items:[]}); }
+  closeModal();
+}
+function delVan(id){ if(!confirm('Delete this van and its stock list?')) return; col('vans').doc(id).delete(); closeModal(); }
+
+function editItem(vanId,itemId){
+  const v=db.vans.find(x=>x.id===vanId);
+  const it=itemId?v.items.find(i=>i.id===itemId):{name:'',unit:'pack',qty:0,par:2};
+  modal(`<h3>${itemId?'Edit item':'Add stock item'}</h3><p class="sub" style="margin:2px 0 12px">${esc(v.name)}</p>
+    <label class="field"><span class="lab">Item name</span><input id="f-iname" value="${esc(it.name)}" placeholder="e.g. 75mm Bugle Screws (box)"></label>
+    <div style="display:flex; gap:10px">
+      <label class="field" style="flex:1"><span class="lab">Have now</span><input id="f-iqty" type="number" min="0" value="${it.qty}"></label>
+      <label class="field" style="flex:1"><span class="lab">Minimum</span><input id="f-ipar" type="number" min="0" value="${it.par}"></label>
+      <label class="field" style="flex:1"><span class="lab">Unit</span><input id="f-iunit" value="${esc(it.unit)}"></label>
+    </div>
+    <div class="btn-row">
+      <button class="btn" onclick="saveItem('${vanId}','${itemId||''}')">Save</button>
+      ${itemId?`<button class="btn danger" onclick="delItem('${vanId}','${itemId}')">Delete</button>`:''}
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+    </div>`);
+}
+function saveItem(vanId,itemId){
+  const v=db.vans.find(x=>x.id===vanId); if(!v) return;
+  const name=val('f-iname').trim(); if(!name){ toast('⚠️ Enter an item name'); return; }
+  const data={name,qty:+val('f-iqty')||0,par:+val('f-ipar')||0,unit:val('f-iunit').trim()||'pack'};
+  const items=(v.items||[]).slice();
+  if(itemId){ const i=items.findIndex(x=>x.id===itemId); if(i>=0) items[i]={...items[i],...data}; }
+  else { items.push({id:uid('s'),...data}); }
+  col('vans').doc(vanId).update({items}); closeModal();
+}
+function delItem(vanId,itemId){
+  const v=db.vans.find(x=>x.id===vanId); if(!v) return;
+  const items=(v.items||[]).filter(i=>i.id!==itemId);
+  col('vans').doc(vanId).update({items}); closeModal();
+}
+function stock(vanId,itemId,delta){
+  const v=db.vans.find(x=>x.id===vanId); if(!v) return;
+  const items=(v.items||[]).map(i=> i.id===itemId ? {...i,qty:Math.max(0,i.qty+delta)} : i);
+  col('vans').doc(vanId).update({items});
+}
+
+/* ============ Order export ============ */
+function orderText(){
+  const low=lowItems(), reqs=openRequests();
+  if(!low.length && !reqs.length) return 'Nothing to order — all good.';
+  let s='KELMAR PROJECTS — ORDER LIST\n'+new Date().toLocaleDateString('en-AU')+'\n';
+  if(reqs.length){
+    s+='\nCREW REQUESTS:\n';
+    const byP={};
+    reqs.forEach(r=>{ const n=person(r.personId)?.name||'Crew'; (byP[n]=byP[n]||[]).push(`  • ${r.qty} ${r.unit} — ${r.item}`); });
+    Object.entries(byP).forEach(([n,items])=>{ s+=n+':\n'+items.join('\n')+'\n'; });
+  }
+  if(low.length){
+    s+='\nVANS RUNNING LOW:\n';
+    const byVan={};
+    low.forEach(({van,item,need})=>{ (byVan[van.name]=byVan[van.name]||[]).push(`  • ${item.name} — order ${need} ${item.unit} (have ${item.qty})`); });
+    Object.entries(byVan).forEach(([v,items])=>{ s+=v+':\n'+items.join('\n')+'\n'; });
+  }
+  return s.trim();
+}
+function copyOrder(){
+  const txt=orderText();
+  navigator.clipboard?.writeText(txt).then(()=>toast('📋 Order list copied'),()=>fallbackCopy(txt));
+}
+function fallbackCopy(txt){ const ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('📋 Copied'); }
+function emailOrder(){
+  const body=encodeURIComponent(orderText());
+  window.location.href=`mailto:mitch@kelmarprojects.com.au?subject=${encodeURIComponent('KelMar Projects — Order list '+new Date().toLocaleDateString('en-AU'))}&body=${body}`;
+}
+
+/* ============ Backup / restore ============ */
+function openBackup(){
+  const url=location.origin+location.pathname;
+  modal(`<h3>Your app</h3>
+    <p class="sub" style="margin:6px 0 14px">This is your <b>live</b> app — it syncs across the whole crew automatically. Share this link; each person saves it to their phone's home screen.</p>
+    <label class="field"><span class="lab">App link</span><input readonly value="${esc(url)}" onclick="this.select()"></label>
+    <button class="btn block" onclick="copyAppLink()">📋 Copy app link</button>
+    <button class="btn ghost block" style="margin-top:10px" onclick="exportData()">⬇️ Download a backup (JSON)</button>
+    <button class="btn ghost block danger" style="margin-top:10px" onclick="clearSample()">🧹 Clear sample data & start fresh</button>
+    <p class="sub" style="margin-top:14px; font-size:12px">🔒 Signed in securely and syncing. Automatic order emails from your own address are the next add-on.</p>`);
+}
+function copyAppLink(){ const url=location.origin+location.pathname; (navigator.clipboard?.writeText(url)||Promise.reject()).then(()=>toast('📋 App link copied'),()=>toast(url)); }
+function exportData(){
+  const blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='kelmar-tool-tracker-backup.json'; a.click(); toast('⬇️ Backup downloaded');
+}
+async function clearSample(){
+  if(!confirm('Remove ALL current data (tools, vans, requests, history) so you can start fresh with your real gear? This can’t be undone.')) return;
+  try{
+    for(const name of COLS){
+      const snap=await col(name).get();
+      const batch=fdb.batch(); snap.docs.forEach(d=>batch.delete(d.ref)); await batch.commit();
+    }
+    await col('people').doc('p1').set({name:'Mitch'});   // keep you as a starting name
+    closeModal(); toast('🧹 Cleared — add your real tools, vans & crew');
+  }catch(e){ toast('⚠️ Couldn’t clear — try again'); }
+}
+
+/* ============ Scanner ============ */
+let scanner=null;
+function toggleScanner(){ scanner?stopScanner():startScanner(); }
+function startScanner(){
+  const reader=document.getElementById('reader');
+  reader.classList.remove('hidden');
+  document.getElementById('scan-toggle').textContent='✕ Stop scanning';
+  if(!window.Html5Qrcode){ toast('⚠️ Scanner needs internet'); return; }
+  scanner=new Html5Qrcode('reader');
+  scanner.start({facingMode:'environment'},{fps:10,qrbox:220},onScan,()=>{})
+    .catch(err=>{ toast('⚠️ Camera blocked — use the list below'); stopScanner(); });
+}
+function stopScanner(){
+  document.getElementById('scan-toggle').textContent='📷 Scan a QR sticker';
+  document.getElementById('reader').classList.add('hidden');
+  if(scanner){ scanner.stop().then(()=>scanner.clear()).catch(()=>{}); scanner=null; }
+}
+function onScan(text){
+  const code=text.replace('KELMAR-TOOL:','').trim();
+  const t=db.tools.find(x=>x.code===code) || db.tools.find(x=>text.includes(x.code));
+  if(t){ if(navigator.vibrate) navigator.vibrate(60); stopScanner(); openSign(t.id); }
+  else { toast('⚠️ Tool not recognised: '+esc(code)); }
+}
+
+/* ============ Modal utils ============ */
+function modal(html){
+  document.getElementById('modal-root').innerHTML=
+    `<div class="modal" onclick="if(event.target===this)closeModal()">
+       <div class="sheet"><div class="handle"></div>${html}</div></div>`;
+}
+function closeModal(){ stopCaptureCamera(); document.getElementById('modal-root').innerHTML=''; }
+function val(id){ return document.getElementById(id).value; }
+function esc(s){ return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* ============ Boot ============ */
+renderAll(); boot();
+</script>
+</body>
+</html>

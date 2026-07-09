@@ -1,11 +1,15 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Small trusted crew: anyone signed in through the KelMar app (anonymous auth)
-    // can read/write. Locks out random internet traffic. Can be tightened later
-    // with named accounts / PINs if needed.
+    // Anyone signed in through the app can read, add and update
+    // (staff sign tools out/in, request supplies, count stock).
+    // Only the ADMIN (email/password sign-in) can DELETE — staff use
+    // anonymous sign-in, so they can never wipe tools, stock or history.
     match /{document=**} {
-      allow read, write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null;
+      allow delete: if request.auth != null
+                    && request.auth.token.firebase.sign_in_provider == 'password';
     }
   }
 }

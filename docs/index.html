@@ -43,6 +43,9 @@ header{
 header .spacer{flex:1}
 .hbtn{background:transparent; border:1px solid #444; color:#ddd; border-radius:8px; padding:8px 10px; font-size:12px}
 .hbtn:hover{border-color:var(--gold); color:var(--gold)}
+.role-pill{font-size:10px; font-weight:800; letter-spacing:1px; padding:4px 8px; border-radius:6px; margin-right:6px}
+.role-pill.admin{background:var(--gold); color:var(--ink)}
+.role-pill.staff{background:#333; color:#bbb}
 
 /* Layout */
 main{max-width:900px; margin:0 auto; padding:16px}
@@ -177,6 +180,7 @@ nav button{position:relative}
 <header>
   <div class="brand"><b>KelMar</b> <span>Projects</span><small>Tool Tracker</small></div>
   <div class="spacer"></div>
+  <span id="role-pill" class="role-pill hidden"></span>
   <button class="hbtn" onclick="openBackup()">⋯ Data</button>
 </header>
 
@@ -308,10 +312,59 @@ function uid(p){ return p+Math.random().toString(36).slice(2,8)+(seedCounter++);
 function nowISO(){ return new Date().toISOString(); }
 function col(n){ return fdb.collection(n); }
 
+const ADMIN_EMAIL = "mitch@kelmarprojects.com.au";   // admin identity — the PASSWORD is the secret (set by Mitch, never stored here)
+let role = (location.hash.replace('#','').toLowerCase()==='admin') ? 'admin' : 'staff';
+let appStarted = false;
+function isAdmin(){ const u=auth.currentUser; return !!(u && !u.isAnonymous); }
+
 function boot(){
-  auth.signInAnonymously().catch(e=>{ console.warn(e); toast('⚠️ Can’t reach the cloud — check internet'); });
-  auth.onAuthStateChanged(user=>{ if(user){ subscribeAll(); seedIfEmpty(); } });
+  auth.onAuthStateChanged(user=>{
+    if(user && !(role==='admin' && user.isAnonymous)){ startApp(); }
+    else if(role==='admin'){ showAdminGate(); }
+  });
+  if(role!=='admin'){
+    auth.signInAnonymously().catch(e=>{ console.warn(e); toast('⚠️ Can’t reach the cloud — check internet'); });
+  }
 }
+function startApp(){
+  if(appStarted) return; appStarted=true;
+  closeModal();
+  document.body.classList.toggle('is-admin', isAdmin());
+  const pill=document.getElementById('role-pill');
+  if(pill){ pill.textContent=isAdmin()?'ADMIN':'STAFF'; pill.className='role-pill '+(isAdmin()?'admin':'staff'); }
+  subscribeAll();
+  seedIfEmpty();
+  renderAll();
+}
+function showAdminGate(){
+  document.getElementById('modal-root').innerHTML =
+   `<div class="modal center"><div class="sheet" style="max-width:420px;border-radius:18px">
+      <div style="font-size:22px;margin-bottom:2px"><b style="font-weight:800">KelMar</b> <span style="font-weight:300">Projects</span></div>
+      <h3 style="margin:8px 0 2px">Admin access</h3>
+      <p class="sub" style="margin:2px 0 14px">Enter your admin password to manage &amp; delete data.</p>
+      <label class="field"><span class="lab">Admin password</span>
+        <input id="admin-pw" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')adminLogin()"></label>
+      <button class="btn block" onclick="adminLogin()">Unlock admin</button>
+      <p id="admin-msg" class="sub" style="margin-top:10px;color:var(--warn)"></p>
+      <p class="sub" style="margin-top:12px;font-size:12px">First time? Type a password above, then <a href="#" onclick="adminSetup();return false" style="color:var(--gold);font-weight:700">set it as your admin password</a>.</p>
+    </div></div>`;
+}
+function adminLogin(){
+  const pw=val('admin-pw'); if(!pw) return;
+  auth.signInWithEmailAndPassword(ADMIN_EMAIL, pw).then(startApp)
+    .catch(()=>{ const m=document.getElementById('admin-msg'); if(m) m.textContent='That password didn’t work. Try again — or set it up if this is the first time.'; });
+}
+function adminSetup(){
+  const pw=val('admin-pw'); const m=document.getElementById('admin-msg');
+  if(!pw || pw.length<6){ if(m) m.textContent='Type a password (at least 6 characters) in the box first.'; return; }
+  auth.createUserWithEmailAndPassword(ADMIN_EMAIL, pw).then(startApp)
+    .catch(err=>{ if(!m) return;
+      if(err.code==='auth/email-already-in-use') m.textContent='Admin is already set up — just enter the password and tap Unlock.';
+      else if(err.code==='auth/weak-password') m.textContent='Please use a longer password (6+ characters).';
+      else if(err.code==='auth/operation-not-allowed') m.textContent='Email/Password sign-in isn’t switched on in Firebase yet.';
+      else m.textContent='Error: '+err.code; });
+}
+function adminLogout(){ auth.signOut().then(()=>location.reload()); }
 function subscribeAll(){
   COLS.forEach(name=>{
     let q = col(name);
@@ -742,7 +795,7 @@ function editTool(id){
     <label class="field"><span class="lab">Home location</span><input id="f-home" value="${esc(t.home||'Garage')}"></label>
     <div class="btn-row" style="margin-top:8px">
       <button class="btn" onclick="saveTool('${id||''}')">Save</button>
-      ${id?`<button class="btn danger" onclick="delTool('${id}')">Delete</button>`:''}
+      ${id&&isAdmin()?`<button class="btn danger" onclick="delTool('${id}')">Delete</button>`:''}
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
     </div>`);
 }
@@ -764,7 +817,7 @@ function editVan(id){
       <select id="f-vowner"><option value="">— nobody —</option>${db.people.filter(p=>p.id!=='p1').map(p=>`<option value="${p.id}" ${v.owner===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>
     <div class="btn-row">
       <button class="btn" onclick="saveVan('${id||''}')">Save</button>
-      ${id?`<button class="btn danger" onclick="delVan('${id}')">Delete</button>`:''}
+      ${id&&isAdmin()?`<button class="btn danger" onclick="delVan('${id}')">Delete</button>`:''}
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
     </div>`);
 }
@@ -789,7 +842,7 @@ function editItem(vanId,itemId){
     </div>
     <div class="btn-row">
       <button class="btn" onclick="saveItem('${vanId}','${itemId||''}')">Save</button>
-      ${itemId?`<button class="btn danger" onclick="delItem('${vanId}','${itemId}')">Delete</button>`:''}
+      ${itemId&&isAdmin()?`<button class="btn danger" onclick="delItem('${vanId}','${itemId}')">Delete</button>`:''}
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
     </div>`);
 }
@@ -844,16 +897,25 @@ function emailOrder(){
 
 /* ============ Backup / restore ============ */
 function openBackup(){
-  const url=location.origin+location.pathname;
-  modal(`<h3>Your app</h3>
-    <p class="sub" style="margin:6px 0 14px">This is your <b>live</b> app — it syncs across the whole crew automatically. Share this link; each person saves it to their phone's home screen.</p>
-    <label class="field"><span class="lab">App link</span><input readonly value="${esc(url)}" onclick="this.select()"></label>
-    <button class="btn block" onclick="copyAppLink()">📋 Copy app link</button>
-    <button class="btn ghost block" style="margin-top:10px" onclick="exportData()">⬇️ Download a backup (JSON)</button>
-    <button class="btn ghost block danger" style="margin-top:10px" onclick="clearSample()">🧹 Clear sample data & start fresh</button>
-    <p class="sub" style="margin-top:14px; font-size:12px">🔒 Signed in securely and syncing. Automatic order emails from your own address are the next add-on.</p>`);
+  const base=location.origin+location.pathname;
+  const admin=isAdmin();
+  modal(`<h3>Your app ${admin?'· <span style="color:var(--gold)">Admin</span>':'· <span style="color:var(--charcoal)">Staff</span>'}</h3>
+    <p class="sub" style="margin:6px 0 14px">Share the <b>staff link</b> with the crew — each person saves it to their phone's home screen.</p>
+    <label class="field"><span class="lab">👷 Staff link (for the boys)</span><input readonly value="${esc(base)}" onclick="this.select()"></label>
+    <button class="btn block" onclick="copyLink('${esc(base)}')">📋 Copy staff link</button>
+    ${admin?`
+    <label class="field" style="margin-top:16px"><span class="lab">🔑 Admin link (keep this for yourself)</span><input readonly value="${esc(base)}#admin" onclick="this.select()"></label>
+    <button class="btn ghost block" onclick="copyLink('${esc(base)}#admin')">📋 Copy admin link</button>
+    <div style="height:1px;background:var(--line);margin:16px 0"></div>
+    <button class="btn ghost block" onclick="exportData()">⬇️ Download a backup (JSON)</button>
+    <button class="btn ghost block danger" style="margin-top:10px" onclick="clearSample()">🧹 Clear ALL data</button>
+    <button class="btn ghost block" style="margin-top:10px" onclick="adminLogout()">Log out of admin</button>
+    <p class="sub" style="margin-top:14px; font-size:12px">🔑 You're in <b>admin</b> mode — you can add, edit and delete.</p>
+    `:`
+    <p class="sub" style="margin-top:16px; font-size:12px">👷 <b>Staff mode</b> — you can sign tools out/in, request supplies and count stock. Only the admin can delete, so nothing gets wiped by accident.</p>
+    `}`);
 }
-function copyAppLink(){ const url=location.origin+location.pathname; (navigator.clipboard?.writeText(url)||Promise.reject()).then(()=>toast('📋 App link copied'),()=>toast(url)); }
+function copyLink(u){ (navigator.clipboard?.writeText(u)||Promise.reject()).then(()=>toast('📋 Copied'),()=>toast(u)); }
 function exportData(){
   const blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob);

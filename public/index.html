@@ -329,7 +329,7 @@ const fdb = firebase.firestore();
 // Firestore's default streaming transport — reads get through but WRITES never reach
 // the server (they sit stuck on the phone). Forcing HTTP long-polling sends writes as
 // plain web requests those networks DO pass. Must run before enablePersistence & any read/write.
-fdb.settings({ experimentalForceLongPolling: true, merge: true });
+fdb.settings({ experimentalForceLongPolling: true, experimentalAutoDetectLongPolling: false, merge: true });
 fdb.enablePersistence({ synchronizeTabs:true }).catch(()=>{});   // offline / patchy signal
 function withTimeout(p, ms){ return Promise.race([Promise.resolve(p), new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')), ms))]); }
 const COLS = ['people','tools','vans','requests','log'];

@@ -46,6 +46,9 @@ header .spacer{flex:1}
 .role-pill{font-size:10px; font-weight:800; letter-spacing:1px; padding:4px 8px; border-radius:6px; margin-right:6px}
 .role-pill.admin{background:var(--gold); color:var(--ink)}
 .role-pill.staff{background:#333; color:#bbb}
+#refresh-btn{font-size:16px; line-height:1; padding:7px 10px}
+#refresh-btn.spinning{animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 
 /* Layout */
 main{max-width:900px; margin:0 auto; padding:16px}
@@ -181,6 +184,7 @@ nav button{position:relative}
   <div class="brand"><b>KelMar</b> <span>Projects</span><small>Tool Tracker</small></div>
   <div class="spacer"></div>
   <span id="role-pill" class="role-pill hidden"></span>
+  <button class="hbtn" id="refresh-btn" onclick="refreshNow(true)" title="Refresh now">⟳</button>
   <button class="hbtn" onclick="openBackup()">⋯ Data</button>
 </header>
 
@@ -322,9 +326,33 @@ function boot(){
     if(user && !(role==='admin' && user.isAnonymous)){ startApp(); }
     else if(role==='admin'){ showAdminGate(); }
   });
-  if(role!=='admin'){
-    auth.signInAnonymously().catch(e=>{ console.warn(e); toast('⚠️ Can’t reach the cloud — check internet'); });
-  }
+  if(role!=='admin'){ signInStaff(); }
+}
+// keep trying to sign in — a dropped/blocked connection recovers on its own
+function signInStaff(attempt=0){
+  auth.signInAnonymously().catch(e=>{
+    console.warn('sign-in retry', e && e.code);
+    if(attempt<10){ setTimeout(()=>signInStaff(attempt+1), Math.min(1500*Math.pow(1.5,attempt), 20000)); }
+    else { toast('⚠️ Can’t connect — check internet, then tap ⟳'); }
+  });
+}
+// pull the latest from the cloud (fallback for when the live link drops on phones)
+let refreshing=false;
+async function refreshNow(manual){
+  const u=auth.currentUser;
+  if(!u){ if(role!=='admin') signInStaff(); return; }
+  if(refreshing) return; refreshing=true;
+  const b=document.getElementById('refresh-btn'); if(b) b.classList.add('spinning');
+  try{
+    await Promise.all(COLS.map(async name=>{
+      let q=col(name); if(name==='log') q=q.orderBy('at','asc');
+      const snap=await q.get({source:'server'});
+      db[name]=snap.docs.map(d=>({id:d.id,...d.data()}));
+    }));
+    renderAll();
+    if(manual) toast('🔄 Up to date');
+  }catch(e){ console.warn('refresh',e); if(manual) toast('⚠️ Couldn’t refresh — check signal'); }
+  finally{ refreshing=false; if(b) b.classList.remove('spinning'); }
 }
 function startApp(){
   if(appStarted) return; appStarted=true;
@@ -335,6 +363,13 @@ function startApp(){
   subscribeAll();
   seedIfEmpty();
   renderAll();
+  // safety net: re-pull from the cloud every 30s while the app is open, and
+  // whenever the phone comes back to the app — so a dropped live link self-heals
+  clearInterval(window._kmRefresh);
+  window._kmRefresh=setInterval(()=>{ if(document.visibilityState==='visible') refreshNow(); }, 30000);
+  if(!window._kmVis){ window._kmVis=true;
+    document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') refreshNow(); });
+  }
 }
 function showAdminGate(){
   document.getElementById('modal-root').innerHTML =

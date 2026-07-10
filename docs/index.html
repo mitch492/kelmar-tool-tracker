@@ -338,6 +338,18 @@ fdb.settings({ experimentalForceLongPolling: true });
 fdb.enablePersistence({ synchronizeTabs:true }).catch(()=>{});   // offline / patchy signal
 function withTimeout(p, ms){ return Promise.race([Promise.resolve(p), new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')), ms))]); }
 const COLS = ['people','tools','vans','requests','log','missing'];
+const APP_VERSION = '20260709-1';   // bump every deploy so phones auto-update to the latest
+async function checkForUpdate(){
+  try{
+    const res = await fetch(location.pathname + '?_v=' + Date.now(), {cache:'no-store'});
+    const m = /APP_VERSION\s*=\s*'([^']+)'/.exec(await res.text());
+    if(m && m[1] !== APP_VERSION && !sessionStorage.getItem('km_upd')){
+      sessionStorage.setItem('km_upd','1');
+      toast('🔄 Updating to the latest version…');
+      setTimeout(()=>location.reload(true), 1200);
+    }
+  }catch(e){}
+}
 
 let db = { people:[], tools:[], vans:[], requests:[], log:[], missing:[] };
 let seedCounter=0;
@@ -405,8 +417,9 @@ function startApp(){
     if(connOk) ensureOnline(); else refreshNow();
   }, 30000);
   if(!window._kmVis){ window._kmVis=true;
-    document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'){ ensureOnline(); refreshNow(); } });
+    document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'){ ensureOnline(); refreshNow(); checkForUpdate(); } });
   }
+  checkForUpdate();
 }
 function showAdminGate(){
   document.getElementById('modal-root').innerHTML =
@@ -1123,12 +1136,17 @@ function editVan(id){
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
     </div>`);
 }
-function saveVan(id){
+async function saveVan(id){
   const name=val('f-vname').trim(); if(!name){ toast('⚠️ Enter a name'); return; }
+  if(!auth.currentUser){ toast('⚠️ Still connecting — try again in a sec'); return; }
   const owner=val('f-vowner')||null;
-  if(id){ col('vans').doc(id).update({name,owner}); }
-  else { col('vans').doc(uid('v')).set({name,owner,items:[]}); }
-  closeModal(); nudge();
+  closeModal(); toast('Saving…');
+  try{
+    if(id){ await col('vans').doc(id).update({name,owner}); }
+    else { await col('vans').doc(uid('v')).set({name,owner,items:[]}); }
+    await withTimeout(fdb.waitForPendingWrites(), 12000);
+    setConn(true); toast('✅ Saved & synced');
+  }catch(e){ console.error('saveVan',e); toast(e&&e.message==='timeout'?'⚠️ Saved on this phone but NOT synced — check signal':'⚠️ Save failed — try again'); }
 }
 function delVan(id){ if(!confirm('Delete this van and its stock list?')) return; col('vans').doc(id).delete(); closeModal(); }
 
@@ -1148,14 +1166,20 @@ function editItem(vanId,itemId){
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
     </div>`);
 }
-function saveItem(vanId,itemId){
+async function saveItem(vanId,itemId){
   const v=db.vans.find(x=>x.id===vanId); if(!v) return;
   const name=val('f-iname').trim(); if(!name){ toast('⚠️ Enter an item name'); return; }
+  if(!auth.currentUser){ toast('⚠️ Still connecting — try again in a sec'); return; }
   const data={name,qty:+val('f-iqty')||0,par:+val('f-ipar')||0,unit:val('f-iunit').trim()||'pack'};
   const items=(v.items||[]).slice();
   if(itemId){ const i=items.findIndex(x=>x.id===itemId); if(i>=0) items[i]={...items[i],...data}; }
   else { items.push({id:uid('s'),...data}); }
-  col('vans').doc(vanId).update({items}); closeModal(); nudge();
+  closeModal(); toast('Saving…');
+  try{
+    await col('vans').doc(vanId).update({items});
+    await withTimeout(fdb.waitForPendingWrites(), 12000);
+    setConn(true); toast('✅ Saved & synced');
+  }catch(e){ console.error('saveItem',e); toast(e&&e.message==='timeout'?'⚠️ Saved on this phone but NOT synced — check signal':'⚠️ Save failed — try again'); }
 }
 function delItem(vanId,itemId){
   const v=db.vans.find(x=>x.id===vanId); if(!v) return;

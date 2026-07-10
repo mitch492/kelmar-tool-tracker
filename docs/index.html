@@ -614,7 +614,7 @@ function renderTools(){
     const p=person(t.holder);
     return `<div class="row" onclick="toolDetail('${t.id}')" style="cursor:pointer">${t.img?`<img src="${t.img}" style="width:38px;height:38px;border-radius:10px;object-fit:cover;flex-shrink:0">`:`<div class="tool-ico">🔧</div>`}
       <div class="grow"><div class="name">${esc(t.name)}</div>
-      <div class="meta">${t.code} · ${esc(t.category||'')}${t.status==='out'&&p?' · with '+esc(p.name)+(t.job?' · '+esc(t.job):''):''}</div></div>
+      <div class="meta">${t.code} · ${esc(t.category||'')}${t.parts&&t.parts.length>1?' · 🧩 '+t.parts.length+'pc':''}${t.status==='out'&&p?' · with '+esc(p.name)+(t.job?' · '+esc(t.job):''):''}</div></div>
       <span class="pill ${t.status}">${t.status==='out'?'OUT':'IN'}</span>
       <span style="color:var(--charcoal);font-size:18px;margin-left:4px">›</span></div>`;
   }).join('') : `<div class="empty"><div class="big">🔧</div>No tools yet. Add your first tool to get a QR code.</div>`;
@@ -676,23 +676,30 @@ function renderLabels(){
   const grid=document.getElementById('labels-grid');
   if(!grid) return;
   db.tools.forEach(t=>{ if(!(t.id in labelSel)) labelSel[t.id]=true; });
-  grid.innerHTML=db.tools.map(t=>`
-    <div class="label" data-tid="${t.id}">
+  const entries=[];
+  db.tools.forEach(t=>{
+    if(t.parts && t.parts.length>1){
+      t.parts.forEach((pt,i)=>entries.push({tid:t.id,code:t.code,name:t.name+' — '+pt.name,sub:(i+1)+' of '+t.parts.length,qid:t.id+'_'+i}));
+    } else {
+      entries.push({tid:t.id,code:t.code,name:t.name,sub:'',qid:t.id});
+    }
+  });
+  grid.innerHTML=entries.map(e=>`
+    <div class="label" data-tid="${e.tid}">
       <label class="no-print" style="display:block; margin-bottom:6px; font-size:11px; color:var(--charcoal)">
-        <input type="checkbox" style="width:auto" ${labelSel[t.id]?'checked':''} onchange="labelSel['${t.id}']=this.checked; syncLabelPrint()"> include
+        <input type="checkbox" style="width:auto" ${labelSel[e.tid]?'checked':''} onchange="labelSel['${e.tid}']=this.checked; syncLabelPrint()"> include
       </label>
-      <div class="qr" id="qr-${t.id}"></div>
-      <div class="lc">${t.code}</div>
-      <div class="ln">${esc(t.name)}</div>
+      <div class="qr" id="qr-${e.qid}"></div>
+      <div class="lc">${e.code}${e.sub?' · '+e.sub:''}</div>
+      <div class="ln">${esc(e.name)}</div>
       <div class="brandtag">KelMar Projects</div>
     </div>`).join('');
-  // draw QR codes
-  db.tools.forEach(t=>{
-    const box=document.getElementById('qr-'+t.id); if(!box) return;
+  entries.forEach(e=>{
+    const box=document.getElementById('qr-'+e.qid); if(!box) return;
     box.innerHTML='';
     if(window.QRCode){
-      try{ new QRCode(box,{text:qrPayload(t),width:110,height:110,correctLevel:QRCode.CorrectLevel.M}); }
-      catch(e){ box.innerHTML='<div style="font-size:10px;color:#999">QR offline</div>'; }
+      try{ new QRCode(box,{text:'KELMAR-TOOL:'+e.code,width:110,height:110,correctLevel:QRCode.CorrectLevel.M}); }
+      catch(err){ box.innerHTML='<div style="font-size:10px;color:#999">QR offline</div>'; }
     } else { box.innerHTML='<div style="font-size:10px;color:#999">QR lib offline</div>'; }
   });
   syncLabelPrint();
@@ -721,8 +728,17 @@ function openSign(toolId){
       ${t.notes?`<div style="font-size:13px;white-space:pre-wrap;color:var(--ink)">${esc(t.notes)}</div>`:''}
       ${citems.map(c=>`<div style="font-size:13px;color:var(--ink)">• ${esc(c)}</div>`).join('')}
       <div class="sub" style="margin:6px 0 0;font-size:11px">Check it's all there — you're accountable for these too.</div></div>` : '';
+    const parts=(t.parts||[]);
+    const partsList = parts.length>1 ? `<div class="card" style="box-shadow:none;background:#fff8e6;border:1.5px solid var(--gold);margin:0 0 12px;padding:10px 12px">
+      <div class="lab" style="margin-bottom:6px">🧩 ${parts.length} parts — tick each as you grab it <span id="parts-count" style="color:#b8860b;font-weight:800">(0 of ${parts.length})</span></div>
+      ${parts.map((pt,i)=>`<label style="display:flex;align-items:center;gap:10px;padding:5px 0;cursor:pointer">
+        <input type="checkbox" class="part-check" style="width:auto;flex-shrink:0" onchange="updatePartCount(${parts.length})">
+        ${pt.img?`<img src="${pt.img}" style="width:34px;height:34px;border-radius:8px;object-fit:cover;flex-shrink:0">`:`<span style="font-size:20px">🧩</span>`}
+        <span style="font-size:14px">${esc(pt.name)} <span class="sub">(${i+1} of ${parts.length})</span></span></label>`).join('')}
+    </div>` : '';
     body=`<h3>Sign out: ${esc(t.name)}</h3><p class="sub" style="margin:2px 0 12px">${t.code}</p>
       ${contents}
+      ${partsList}
       <label class="field"><span class="lab">Who's taking it?</span>
         <select id="f-person">${db.people.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></label>
       <button class="btn ghost sm" style="margin:-6px 0 12px" onclick="addPersonInline('${t.id}')">+ Add a crew member</button>
@@ -751,8 +767,14 @@ function openSign(toolId){
 }
 function setDue(days){ const el=document.getElementById('f-due'); if(!el) return; const d=new Date(); d.setDate(d.getDate()+days); el.value=[d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-'); }
 function fmtDate(d){ try{ return new Date(d).toLocaleDateString('en-AU',{day:'2-digit',month:'short'}); }catch(e){ return d; } }
+function updatePartCount(n){ const got=[...document.querySelectorAll('.part-check')].filter(c=>c.checked).length; const el=document.getElementById('parts-count'); if(el) el.textContent='('+got+' of '+n+')'; }
 function continueSignOut(toolId){
   const personId=val('f-person'); if(!personId){ toast('⚠️ Pick who\'s taking it'); return; }
+  const t=tool(toolId);
+  if(t.parts && t.parts.length>1){
+    const got=[...document.querySelectorAll('.part-check')].filter(c=>c.checked).length;
+    if(got<t.parts.length){ toast(`⚠️ Only ${got} of ${t.parts.length} parts ticked — grab them all, or report the missing one`); return; }
+  }
   startSignOut(toolId, {personId, job:(val('f-job')||'').trim(), due:val('f-due')||''});
 }
 function addPersonInline(toolId){
@@ -886,6 +908,11 @@ function toolDetail(toolId){
     ${citems.length?citems.map(c=>`<div style="font-size:13px;padding:1px 0">• ${esc(c)}</div>`).join(''):(t.notes?'':'<div class="sub" style="font-size:12px">Nothing listed yet.</div>')}
     <button class="btn ghost sm" style="margin-top:8px" onclick="addContentDetail('${t.id}')">＋ Add an item</button>
     <span class="sub" style="font-size:11px;display:block;margin-top:4px">Add-only — items can't be removed.</span></div>`;
+  const tparts=(t.parts||[]);
+  const partsBlock = tparts.length ? `<div class="card" style="box-shadow:none;background:var(--grey);margin-bottom:12px;padding:10px 12px">
+    <div class="lab" style="margin-bottom:6px">🧩 ${tparts.length} parts — one QR covers all</div>
+    ${tparts.map((pt,i)=>`<div class="row" style="padding:5px 0">${pt.img?`<img src="${pt.img}" onclick="viewPhotoEl(this)" style="width:38px;height:38px;border-radius:8px;object-fit:cover;cursor:zoom-in;flex-shrink:0">`:`<div class="tool-ico">🧩</div>`}<div class="grow"><div class="name" style="font-size:14px">${esc(pt.name)}</div><div class="meta">part ${i+1} of ${tparts.length}</div></div></div>`).join('')}
+  </div>` : '';
   const hist=db.log.filter(l=>l.toolId===toolId).slice(-8).reverse();
   const history = hist.length ? `<h3 style="font-size:14px;font-weight:800;margin:16px 0 4px">History</h3>`+hist.map(l=>{
       const pp=person(l.personId);
@@ -897,6 +924,7 @@ function toolDetail(toolId){
     }).join('') : '';
   modal(`<h3>${esc(t.name)}</h3><p class="sub" style="margin:2px 0 12px">${t.code} · ${esc(t.category||'')}</p>
     ${cur}
+    ${partsBlock}
     ${notesBlock}
     <button class="btn block" onclick="openSign('${t.id}')">${t.status==='out'?'📥 Return / move':'📤 Sign it out'}</button>
     <button class="btn ghost block danger" style="margin-top:8px" onclick="reportMissing('${t.id}')">⚠️ Report missing / issue</button>
@@ -971,7 +999,7 @@ function fulfillRequest(id){
 }
 
 /* ===== reusable camera (tool photos, rear-facing) ===== */
-let _toolImg=null, _toolContents=[], _camStream=null, _camData=null, _camDone=null;
+let _toolImg=null, _toolContents=[], _toolParts=[], _camStream=null, _camData=null, _camDone=null;
 function openCamera(subtitle, onDone){
   _camData=null; _camDone=onDone;
   modal(`<h3>Photo of the tool</h3><p class="sub" style="margin:2px 0 12px">${esc(subtitle||'')}</p>
@@ -1007,6 +1035,7 @@ function editTool(id, keep){
   const cur = keep || t || {code:nextCode(),name:'',category:'',home:'Garage'};
   _toolImg = keep ? (keep.img||null) : (t? (t.img||null) : null);
   _toolContents = (keep ? keep.contents : (t? t.contents : [])) || [];
+  _toolParts = (keep ? keep.parts : (t? t.parts : [])) || [];
   modal(`
     <h3>${id?'Edit tool':'Add tool'}</h3>
     <label class="field" style="margin-top:14px"><span class="lab">Tool name</span><input id="f-name" value="${esc(cur.name||'')}" placeholder="e.g. Demolition saw"></label>
@@ -1022,6 +1051,13 @@ function editTool(id, keep){
       <button type="button" class="btn ghost" onclick="addContentEdit('${id||''}')">＋ Add</button>
     </div>
     <span class="sub" style="font-size:11px;display:block;margin-bottom:8px">Add-only — once listed, an item can't be removed. Anyone can add more later.</span>
+    <span class="lab" style="font-size:12px;font-weight:600;color:var(--charcoal)">🧩 Multiple parts? (e.g. bench + 2 legs — one QR covers all)</span>
+    <div id="parts-list" style="margin:5px 0 6px">${_toolParts.length?_toolParts.map((pt,i)=>`<div class="row" style="padding:5px 0">${pt.img?`<img src="${pt.img}" style="width:34px;height:34px;border-radius:8px;object-fit:cover;flex-shrink:0">`:`<div class="tool-ico">🧩</div>`}<div class="grow"><div class="name" style="font-size:14px">${esc(pt.name)}</div><div class="meta">part ${i+1} of ${_toolParts.length}</div></div><button type="button" class="btn sm ghost danger" onclick="removePart(${i},'${id||''}')">✕</button></div>`).join(''):'<div class="sub" style="font-size:12px">Single item. Add parts below if it comes in pieces.</div>'}</div>
+    <div style="display:flex;gap:8px">
+      <input id="f-part-name" placeholder="Part name, e.g. Left leg">
+      <button type="button" class="btn ghost" onclick="addPart('${id||''}')">📷 Add part</button>
+    </div>
+    <span class="sub" style="font-size:11px;display:block;margin-bottom:8px">Each part gets its own photo. At sign-out the boys tick off every part.</span>
     <span class="lab" style="font-size:12px;font-weight:600;color:var(--charcoal)">Photo of the tool</span>
     <div id="tool-photo-preview" style="margin:5px 0 8px">${_toolImg?`<img src="${_toolImg}" style="width:100%;max-height:200px;object-fit:cover;border-radius:12px">`:''}</div>
     <button class="btn ghost block" onclick="captureToolPhoto('${id||''}')">${_toolImg?'📷 Replace photo':'📷 Take a photo of the tool'}</button>
@@ -1031,16 +1067,23 @@ function editTool(id, keep){
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
     </div>`);
 }
+function curDraft(){ return {name:val('f-name'),code:val('f-code'),category:val('f-cat'),home:val('f-home'),contents:_toolContents.slice(),parts:_toolParts.slice(),img:_toolImg}; }
 function captureToolPhoto(id){
-  const draft={name:val('f-name'),code:val('f-code'),category:val('f-cat'),home:val('f-home'),contents:_toolContents.slice(),img:_toolImg};
+  const draft=curDraft();
   openCamera('Point the camera at the tool and take a clear photo.', data=>{ if(data) draft.img=data; editTool(id||null, draft); });
 }
 function addContentEdit(id){
   const v=(val('f-content-add')||'').trim(); if(!v) return;
   _toolContents.push(v);
-  editTool(id||null, {name:val('f-name'),code:val('f-code'),category:val('f-cat'),home:val('f-home'),contents:_toolContents.slice(),img:_toolImg});
+  editTool(id||null, curDraft());
   setTimeout(()=>{ const el=document.getElementById('f-content-add'); if(el) el.focus(); },30);
 }
+function addPart(id){
+  const name=(val('f-part-name')||'').trim(); if(!name){ toast('⚠️ Name the part first'); return; }
+  const draft=curDraft();
+  openCamera('Photo of “'+name+'”', data=>{ draft.parts.push({id:uid('pt'),name,img:data||null}); editTool(id||null, draft); });
+}
+function removePart(i,id){ _toolParts.splice(i,1); editTool(id||null, curDraft()); }
 async function addContentDetail(toolId){
   const v=prompt('Add an item to the box contents (can’t be removed once added):'); if(!v||!v.trim()) return;
   const t=tool(toolId); const contents=(t.contents||[]).concat([v.trim()]);
@@ -1053,7 +1096,7 @@ async function saveTool(id){
   if(!auth.currentUser){ toast('⚠️ Still connecting — give it a sec and try again'); return; }
   let img=_toolImg||null;
   if(img && img.length>800000){ img=null; toast('⚠️ Photo too big — saving the tool without it'); }
-  const data={name,code:val('f-code').trim()||nextCode(),category:val('f-cat').trim(),home:val('f-home').trim(),contents:_toolContents.slice(),img};
+  const data={name,code:val('f-code').trim()||nextCode(),category:val('f-cat').trim(),home:val('f-home').trim(),contents:_toolContents.slice(),parts:_toolParts.slice(),img};
   closeModal(); toast('Saving…');
   try{
     if(id){ await col('tools').doc(id).update(data); }

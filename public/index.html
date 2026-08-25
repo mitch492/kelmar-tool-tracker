@@ -338,7 +338,7 @@ fdb.settings({ experimentalForceLongPolling: true });
 fdb.enablePersistence({ synchronizeTabs:true }).catch(()=>{});   // offline / patchy signal
 function withTimeout(p, ms){ return Promise.race([Promise.resolve(p), new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')), ms))]); }
 const COLS = ['people','tools','vans','requests','log','missing'];
-const APP_VERSION = '20260709-1';   // bump every deploy so phones auto-update to the latest
+const APP_VERSION = '20260825-1';   // bump every deploy so phones auto-update to the latest
 async function checkForUpdate(){
   try{
     const res = await fetch(location.pathname + '?_v=' + Date.now(), {cache:'no-store'});
@@ -940,6 +940,7 @@ function toolDetail(toolId){
     ${partsBlock}
     ${notesBlock}
     <button class="btn block" onclick="openSign('${t.id}')">${t.status==='out'?'📥 Return / move':'📤 Sign it out'}</button>
+    <button class="btn block" style="margin-top:8px;background:#1A1A1A" onclick="printOneLabel('${t.id}')">🏷️ Print QR label</button>
     <button class="btn ghost block danger" style="margin-top:8px" onclick="reportMissing('${t.id}')">⚠️ Report missing / issue</button>
     ${history}
     <button class="btn ghost block" style="margin-top:12px" onclick="editTool('${t.id}')">Edit tool details</button>`);
@@ -981,6 +982,64 @@ async function submitMissing(toolId, lastHolderId){
   }catch(e){ console.error('missing',e); toast('⚠️ Not synced — check signal, then tap ⟳'); }
 }
 function resolveMissing(id){ col('missing').doc(id).update({status:'resolved',resolvedAt:nowISO()}); nudge(); toast('✅ Resolved'); }
+
+/* ===== Print ONE QR label to a Brother P-touch (PT-P710BT) via the phone's share sheet =====
+   A web app can't drive a Bluetooth label printer directly on iPhone/iPad, so we build a single
+   ready-to-print QR label image (big QR filling the 24mm tape + KMT number underneath) and hand it
+   to the Brother P-touch app, which does the actual Bluetooth printing. One tool, one label. */
+let _labelData=null, _labelName='label.png';
+function printOneLabel(toolId){
+  const t=tool(toolId); if(!t) return;
+  if(!window.QRCode){ toast('⚠️ QR needs internet, connect and try again'); return; }
+  const holder=document.createElement('div');
+  new QRCode(holder,{text:'KELMAR-TOOL:'+t.code, width:640, height:640, correctLevel:QRCode.CorrectLevel.H});
+  setTimeout(()=>{
+    const qr=holder.querySelector('canvas')||holder.querySelector('img');
+    const QUIET=48, QR=464, W=QR+QUIET*2, TXT=150, H=QR+QUIET+TXT;  // ~24mm square block, QR fills the tape
+    const c=document.createElement('canvas'); c.width=W; c.height=H;
+    const x=c.getContext('2d');
+    x.fillStyle='#fff'; x.fillRect(0,0,W,H);                        // white tape background, black print
+    if(qr) x.drawImage(qr, QUIET, QUIET, QR, QR);                  // big QR, quiet-zone border so it scans
+    x.fillStyle='#000'; x.textAlign='center'; x.textBaseline='middle';
+    x.font='bold 104px Arial, Helvetica, sans-serif';
+    x.fillText(t.code||'', W/2, QR+QUIET+TXT/2);                   // KMT-### big & bold along the bottom
+    _labelData=c.toDataURL('image/png');
+    _labelName='KM-'+(t.code||'label')+'.png';
+    showLabelShare(t);
+  },80);
+}
+function showLabelShare(t){
+  modal(`<h3>🏷️ Print label</h3>
+    <p class="sub" style="margin:2px 0 12px">${esc(t.name)} · ${t.code}</p>
+    <div style="background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center;margin-bottom:12px">
+      <img src="${_labelData}" alt="label" style="max-width:210px;width:100%">
+    </div>
+    <button class="btn block" style="background:#1A1A1A" onclick="shareLabel()">📤 Send to P-touch printer</button>
+    <p class="sub" style="font-size:12px;line-height:1.5;margin-top:12px">
+      1. Turn the P-touch on, make sure this phone is <b>Bluetooth-connected</b> to it.<br>
+      2. Tap the button above → in the share menu pick your <b>Brother P-touch / iPrint&amp;Label</b> app (or <b>Save Image</b>, then import it in the Brother app).<br>
+      3. Set tape to <b>24mm</b> and print. The QR fills the tape with the KMT number under it.</p>
+    <button class="btn ghost block" style="margin-top:8px" onclick="closeModal()">Close</button>`);
+}
+async function shareLabel(){
+  if(!_labelData) return;
+  try{
+    const blob=await (await fetch(_labelData)).blob();
+    const file=new File([blob], _labelName, {type:'image/png'});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file], title:'KelMar tool label'});
+    }else{
+      const a=document.createElement('a'); a.href=_labelData; a.download=_labelName;
+      document.body.appendChild(a); a.click(); a.remove();
+      toast('Saved, open it in the Brother app to print');
+    }
+  }catch(e){
+    if(e && e.name==='AbortError') return;                          // user closed the share sheet
+    const a=document.createElement('a'); a.href=_labelData; a.download=_labelName;
+    document.body.appendChild(a); a.click(); a.remove();
+    toast('Saved, open it in the Brother app to print');
+  }
+}
 
 /* --- crew supply requests: "give Dalton 10 boxes" --- */
 function openRequest(personId){
